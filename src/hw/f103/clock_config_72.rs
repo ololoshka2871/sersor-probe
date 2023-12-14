@@ -4,11 +4,11 @@ use stm32f1xx_hal::{
 };
 
 // /PD *M /AD
-pub(crate) const PLL_P_DIV: PLLXTPRE_A = PLLXTPRE_A::DIV2;
+pub(crate) const PLL_P_DIV: PLLXTPRE_A = PLLXTPRE_A::Div2;
 pub(crate) const PLL_MUL: u32 = 9;
-pub(crate) const APB1_DEVIDER: PPre = PPre::DIV2;
-pub(crate) const APB2_DEVIDER: PPre = PPre::DIV1;
+pub(crate) const APB1_DEVIDER: PPre = PPre::Div2;
+pub(crate) const APB2_DEVIDER: PPre = PPre::Div1;
 
-pub(crate) const AHB_DEVIDER: HPre = HPre::DIV1;
-pub(crate) const USB_DEVIDER: UsbPre = UsbPre::DIV1_5;
-pub(crate) const ADC_DEVIDER: AdcPre = AdcPre::DIV8;
+pub(crate) const AHB_DEVIDER: HPre = HPre::Div1;
+pub(crate) const USB_DEVIDER: UsbPre = UsbPre::Div15;
+pub(crate) const ADC_DEVIDER: AdcPre = AdcPre::Div8;

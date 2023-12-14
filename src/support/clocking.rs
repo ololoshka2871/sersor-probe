@@ -42,8 +42,8 @@ impl MyConfig {
         let sysclk = if let Some(pllmul_bits) = self.pllmul {
             let pllsrcclk = if let Some(hse) = self.hse {
                 match self.hse_p_div {
-                    PLLXTPRE_A::DIV1 => hse,
-                    PLLXTPRE_A::DIV2 => hse / 2,
+                    PLLXTPRE_A::Div1 => hse,
+                    PLLXTPRE_A::Div2 => hse / 2,
                 }
             } else {
                 HSI / 2

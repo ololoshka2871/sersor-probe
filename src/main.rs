@@ -43,25 +43,25 @@ struct HighPerformanceClockConfigProvider;
 impl HighPerformanceClockConfigProvider {
     fn ahb_dev2val(ahb_dev: HPre) -> u32 {
         match ahb_dev {
-            HPre::DIV1 => 1,
-            HPre::DIV2 => 2,
-            HPre::DIV4 => 4,
-            HPre::DIV8 => 8,
-            HPre::DIV16 => 16,
-            HPre::DIV64 => 64,
-            HPre::DIV128 => 128,
-            HPre::DIV256 => 256,
-            HPre::DIV512 => 512,
+            HPre::Div1 => 1,
+            HPre::Div2 => 2,
+            HPre::Div4 => 4,
+            HPre::Div8 => 8,
+            HPre::Div16 => 16,
+            HPre::Div64 => 64,
+            HPre::Div128 => 128,
+            HPre::Div256 => 256,
+            HPre::Div512 => 512,
         }
     }
 
     fn apb_dev2val(apb_dev: PPre) -> u32 {
         match apb_dev {
-            PPre::DIV1 => 1,
-            PPre::DIV2 => 2,
-            PPre::DIV4 => 4,
-            PPre::DIV8 => 8,
-            PPre::DIV16 => 16,
+            PPre::Div1 => 1,
+            PPre::Div2 => 2,
+            PPre::Div4 => 4,
+            PPre::Div8 => 8,
+            PPre::Div16 => 16,
         }
     }
 
@@ -71,8 +71,8 @@ impl HighPerformanceClockConfigProvider {
 
     fn ppl_div2val(div: stm32f1xx_hal::device::rcc::cfgr::PLLXTPRE_A) -> u32 {
         match div {
-            stm32f1xx_hal::device::rcc::cfgr::PLLXTPRE_A::DIV1 => 1,
-            stm32f1xx_hal::device::rcc::cfgr::PLLXTPRE_A::DIV2 => 2,
+            stm32f1xx_hal::device::rcc::cfgr::PLLXTPRE_A::Div1 => 1,
+            stm32f1xx_hal::device::rcc::cfgr::PLLXTPRE_A::Div2 => 2,
         }
     }
 
@@ -168,7 +168,7 @@ impl ClockConfigProvider for HighPerformanceClockConfigProvider {
     // stm32_cube: if APB devider > 1, timers freq APB*2
     fn master_counter_frequency() -> Hertz {
         // TIM3 - APB1
-        if APB2_DEVIDER == PPre::DIV1 {
+        if APB2_DEVIDER == PPre::Div1 {
             Self::core_frequency()
         } else {
             Self::core_frequency() * 2
@@ -200,12 +200,15 @@ impl ClockConfigProvider for HighPerformanceClockConfigProvider {
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
+    use embedded_hal::blocking::serial;
+
     use super::*;
 
     #[shared]
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
-        serial: SerialPort<'static, UsbBus<Peripheral>>,
+        serial1: SerialPort<'static, UsbBus<Peripheral>>,
+        serial2: SerialPort<'static, UsbBus<Peripheral>>,
         //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
         //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
     }
@@ -254,16 +257,17 @@ mod app {
             USB_BUS.replace(UsbBus::new(usb));
         }
 
-        let serial = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
+        let serial1 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
+        let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            usb_device::prelude::UsbVidPid(0x16c0, 0x27dd),
+            usb_device::prelude::UsbVidPid(0x16c0, 0x394f),
         )
         .manufacturer("SCTBElpa")
-        .product("OPAL-rust")
-        .serial_number("1")
-        .device_class(usbd_serial::USB_CLASS_CDC)
+        .product("SensorProbe")
+        .serial_number(stm32_device_signature::device_id_hex())
+        .composite_with_iads()
         .build();
 
         //---------------------------------------------------------------------
@@ -275,7 +279,8 @@ mod app {
         (
             Shared {
                 usb_device: usb_dev,
-                serial,
+                serial1,
+                serial2,
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
@@ -286,25 +291,27 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial], priority = 1)]
+    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1, serial2], priority = 1)]
     fn usb_tx(ctx: usb_tx::Context) {
         let mut usb_device = ctx.shared.usb_device;
-        let mut serial = ctx.shared.serial;
+        let mut serial1 = ctx.shared.serial1;
+        let mut serial2 = ctx.shared.serial2;
 
-        if !(&mut usb_device, &mut serial)
-            .lock(move |usb_device, serial| super::usb_poll(usb_device, serial))
+        if !(&mut usb_device, &mut serial1, &mut serial2)
+            .lock(move |usb_device, serial1, serial2| super::usb_poll(usb_device, serial1, serial2))
         {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
         }
     }
 
-    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial], priority = 1)]
+    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1, serial2], priority = 1)]
     fn usb_rx0(ctx: usb_rx0::Context) {
         let mut usb_device = ctx.shared.usb_device;
-        let mut serial = ctx.shared.serial;
+        let mut serial1 = ctx.shared.serial1;
+        let mut serial2 = ctx.shared.serial2;
 
-        if !(&mut usb_device, &mut serial)
-            .lock(move |usb_device, serial| super::usb_poll(usb_device, serial))
+        if !(&mut usb_device, &mut serial1, &mut serial2)
+            .lock(move |usb_device, serial1, serial2| super::usb_poll(usb_device, serial1, serial2))
         {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
         }
@@ -312,21 +319,9 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial], local = [])]
+    #[idle(shared=[], local = [])]
     fn idle(ctx: idle::Context) -> ! {
         //let mut serial = ctx.shared.serial;
-
-        /*
-        fn send<const N: usize>(
-            serial: &mut shared_resources::serial_that_needs_to_be_locked,
-            msg: Option<heapless::String<N>>,
-        ) {
-            if let Some(msg) = msg {
-                let _ = serial.lock(|s| s.write(msg.as_bytes()));
-                //rtic::pend(stm32f1xx_hal::device::Interrupt::USB_HP_CAN_TX);
-            }
-        }
-        */
 
         loop {
             cortex_m::asm::wfi();
@@ -336,14 +331,41 @@ mod app {
 
 fn usb_poll<B: usb_device::bus::UsbBus>(
     usb_dev: &mut usb_device::prelude::UsbDevice<'static, B>,
-    serial: &mut usbd_serial::SerialPort<'static, B>,
+    serial1: &mut usbd_serial::SerialPort<'static, B>,
+    serial2: &mut usbd_serial::SerialPort<'static, B>,
 ) -> bool
 where
     B: usb_device::bus::UsbBus,
 {
-    if !usb_dev.poll(&mut [serial]) {
+    if !usb_dev.poll(&mut [serial1, serial2]) {
         return true;
     }
 
-    true
+    let mut buf = [0u8; 64];
+
+    // read from serial1
+    match serial1.read(&mut buf) {
+        Ok(count) if count > 0 => {
+            if let Ok(result) = core::str::from_utf8(&buf[..count]) {
+                defmt::debug!("serial1: {} ({} bytes)", result, count);
+            } else {
+                defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
+            }
+        }
+        _ => {}
+    }
+
+    // read from serial2
+    match serial2.read(&mut buf) {
+        Ok(count) if count > 0 => {
+            if let Ok(result) = core::str::from_utf8(&buf[..count]) {
+                defmt::debug!("serial2: {} ({} bytes)", result, count);
+            } else {
+                defmt::debug!("serial2: {:?} ({} bytes)", &buf[..count], count);
+            }
+        }
+        _ => {}
+    }
+
+    false
 }

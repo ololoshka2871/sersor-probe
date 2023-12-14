@@ -35,7 +35,9 @@ use systick_monotonic::Systick;
 
 use support::clocking::{ClockConfigProvider, MyConfig};
 
-use hw::{ADC_DEVIDER, AHB_DEVIDER, APB1_DEVIDER, APB2_DEVIDER, PLL_MUL, PLL_P_DIV, USB_DEVIDER};
+use hw::clock_config_48::{
+    ADC_DEVIDER, AHB_DEVIDER, APB1_DEVIDER, APB2_DEVIDER, PLL_MUL, PLL_P_DIV, USB_DEVIDER,
+};
 
 //-----------------------------------------------------------------------------
 
@@ -209,7 +211,7 @@ mod app {
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
         serial1: SerialPort<'static, UsbBus<Peripheral>>,
-        serial2: SerialPort<'static, UsbBus<Peripheral>>,
+        //serial2: SerialPort<'static, UsbBus<Peripheral>>,
         //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
         //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
     }
@@ -221,8 +223,14 @@ mod app {
     type MonoTimer = Systick<{ config::SYSTICK_RATE_HZ }>;
 
     #[init]
-    fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+    fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
+
+        defmt::info!("Init...");
+
+        ctx.core.DCB.enable_trace();
+        ctx.core.DWT.enable_cycle_counter();
+        defmt::info!("DWT...");
 
         let mut flash = ctx.device.FLASH.constrain();
 
@@ -235,8 +243,8 @@ mod app {
         let mut afio = ctx.device.AFIO.constrain();
         let (pa15, pb3, pb4) = afio.mapr.disable_jtag(gpioa.pa15, gpiob.pb3, gpiob.pb4);
 
-        let mut usb_pull_up = pa15.into_push_pull_output_with_state(
-            &mut gpioa.crh,
+        let mut usb_pull_up = gpiob.pb8.into_push_pull_output_with_state(
+            &mut gpiob.crh,
             if !config::USB_PULLUP_ACTVE_LEVEL {
                 stm32f1xx_hal::gpio::PinState::High
             } else {
@@ -249,6 +257,8 @@ mod app {
 
         let mono = Systick::new(ctx.core.SYST, clocks.sysclk().to_Hz());
 
+        //---------------------------------------------------------------------
+
         let usb = Peripheral {
             usb: ctx.device.USB,
             pin_dm: gpioa.pa11,
@@ -260,7 +270,7 @@ mod app {
         }
 
         let serial1 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
-        let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
+        //let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
@@ -315,7 +325,7 @@ mod app {
             Shared {
                 usb_device: usb_dev,
                 serial1,
-                serial2,
+                //serial2,
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
@@ -326,86 +336,64 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1, serial2], priority = 1)]
+    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1/*, serial2*/], priority = 1)]
     fn usb_tx(ctx: usb_tx::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial1 = ctx.shared.serial1;
-        let mut serial2 = ctx.shared.serial2;
+        //let mut serial2 = ctx.shared.serial2;
 
-        if !(&mut usb_device, &mut serial1, &mut serial2)
-            .lock(move |usb_device, serial1, serial2| super::usb_poll(usb_device, serial1, serial2))
-        {
-            cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
-        }
+        (&mut usb_device, &mut serial1, /*&mut serial2*/)
+            .lock(|usb_device, serial1/*, serial2*/| usb_device.poll(&mut [serial1, /*serial2*/]));
     }
 
-    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1, serial2], priority = 1)]
+    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1/*, serial2*/], priority = 1)]
     fn usb_rx0(ctx: usb_rx0::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial1 = ctx.shared.serial1;
-        let mut serial2 = ctx.shared.serial2;
+        //let mut serial2 = ctx.shared.serial2;
 
-        if !(&mut usb_device, &mut serial1, &mut serial2)
-            .lock(move |usb_device, serial1, serial2| super::usb_poll(usb_device, serial1, serial2))
-        {
-            cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
-        }
+        (&mut usb_device, &mut serial1, /*&mut serial2*/)
+            .lock(|usb_device, serial1/* , serial2*/| usb_device.poll(&mut [serial1, /*serial2*/]));
     }
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[], local = [])]
-    fn idle(ctx: idle::Context) -> ! {
-        //let mut serial = ctx.shared.serial;
-
+    #[idle(shared=[serial1/*, serial2*/], local = [])]
+    fn idle(mut ctx: idle::Context) -> ! {
         loop {
-            cortex_m::asm::wfi();
-            unsafe {
-                cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
-                cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
-            }
+            let mut buf = [0u8; 64];
+
+            //let ctrl = serial1.line_coding(); // port config
+
+            // read from serial1
+            ctx.shared
+                .serial1
+                .lock(|serial1| match serial1.read(&mut buf) {
+                    Ok(count) if count > 0 => {
+                        if let Ok(result) = core::str::from_utf8(&buf[..count]) {
+                            defmt::debug!("serial1: {} ({} bytes)", result, count);
+                        } else {
+                            defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
+                        }
+                    }
+                    _ => {}
+                });
+
+            /* 
+            // read from serial2
+            ctx.shared
+                .serial2
+                .lock(|serial2| match serial2.read(&mut buf) {
+                    Ok(count) if count > 0 => {
+                        if let Ok(result) = core::str::from_utf8(&buf[..count]) {
+                            defmt::debug!("serial2: {} ({} bytes)", result, count);
+                        } else {
+                            defmt::debug!("serial2: {:?} ({} bytes)", &buf[..count], count);
+                        }
+                    }
+                    _ => {}
+                });
+            */
         }
     }
-}
-
-fn usb_poll<B: usb_device::bus::UsbBus>(
-    usb_dev: &mut usb_device::prelude::UsbDevice<'static, B>,
-    serial1: &mut usbd_serial::SerialPort<'static, B>,
-    serial2: &mut usbd_serial::SerialPort<'static, B>,
-) -> bool
-where
-    B: usb_device::bus::UsbBus,
-{
-    if !usb_dev.poll(&mut [serial1, serial2]) {
-        return true;
-    }
-
-    let mut buf = [0u8; 64];
-
-    //let ctrl = serial1.line_coding(); // port config
-    // read from serial1
-    match serial1.read(&mut buf) {
-        Ok(count) if count > 0 => {
-            if let Ok(result) = core::str::from_utf8(&buf[..count]) {
-                defmt::debug!("serial1: {} ({} bytes)", result, count);
-            } else {
-                defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
-            }
-        }
-        _ => {}
-    }
-
-    // read from serial2
-    match serial2.read(&mut buf) {
-        Ok(count) if count > 0 => {
-            if let Ok(result) = core::str::from_utf8(&buf[..count]) {
-                defmt::debug!("serial2: {} ({} bytes)", result, count);
-            } else {
-                defmt::debug!("serial2: {:?} ({} bytes)", &buf[..count], count);
-            }
-        }
-        _ => {}
-    }
-
-    false
 }

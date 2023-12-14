@@ -18,6 +18,7 @@ use stm32f1xx_hal::gpio::{
     Floating, GpioExt, Input, Output, PushPull, PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7, PA9, PB3,
     PB4, PB5, PB6, PC13, PC14, PC15,
 };
+use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::rcc::{HPre, PPre};
 use stm32f1xx_hal::time::Hertz;
 use stm32f1xx_hal::timer::{PwmChannel, Timer};
@@ -244,6 +245,7 @@ mod app {
         );
 
         let clocks = HighPerformanceClockConfigProvider::freeze(&mut flash.acr);
+        defmt::info!("Clocks: {}", defmt::Debug2Format(&clocks));
 
         let mono = Systick::new(ctx.core.SYST, clocks.sysclk().to_Hz());
 
@@ -270,9 +272,42 @@ mod app {
         .composite_with_iads()
         .build();
 
+        defmt::info!("USB device");
+
+        //---------------------------------------------------------------------
+
+        // UART1
+        let _uart1 = stm32f1xx_hal::serial::Serial::new(
+            ctx.device.USART1,
+            (
+                gpiob.pb6.into_alternate_push_pull(&mut gpiob.crl),
+                gpiob.pb7,
+            ),
+            &mut afio.mapr,
+            stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),
+            &clocks,
+        );
+
+        //_uart1.reconfigure(config, clocks)
+
+        // UART2
+        let _uart2 = stm32f1xx_hal::serial::Serial::new(
+            ctx.device.USART2,
+            (
+                gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl),
+                gpioa.pa3,
+            ),
+            &mut afio.mapr,
+            stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),
+            &clocks,
+        );
+
+        defmt::info!("Serial ports");
+
         //---------------------------------------------------------------------
 
         usb_pull_up.toggle(); // enable USB
+        defmt::info!("USB enabled");
 
         //---------------------------------------------------------------------
 
@@ -325,6 +360,10 @@ mod app {
 
         loop {
             cortex_m::asm::wfi();
+            unsafe {
+                cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
+                cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
+            }
         }
     }
 }
@@ -343,6 +382,7 @@ where
 
     let mut buf = [0u8; 64];
 
+    //let ctrl = serial1.line_coding(); // port config
     // read from serial1
     match serial1.read(&mut buf) {
         Ok(count) if count > 0 => {

@@ -1,0 +1,25 @@
+**/*.rs.bk
+.#*
+.gdb_history
+Cargo.lock
+target/
+
+# editor files
+.vscode/*
+!.vscode/*.md
+!.vscode/*.svd
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# doc
+*.pdf
+
+# gen
+test/protocol_pb2.py
+__pycache__/
+.pytest_cache/
+
+#regs
+*_regs.txt

@@ -246,7 +246,7 @@ mod app {
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
         serial1: SerialPort<'static, UsbBus<Peripheral>>,
-        //serial2: SerialPort<'static, UsbBus<Peripheral>>,
+        serial2: SerialPort<'static, UsbBus<Peripheral>>,
         //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
         //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
     }
@@ -305,7 +305,7 @@ mod app {
         }
 
         let serial1 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
-        //let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
+        let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
 
         let usb_dev = UsbDeviceBuilder::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
@@ -360,7 +360,7 @@ mod app {
             Shared {
                 usb_device: usb_dev,
                 serial1,
-                //serial2,
+                serial2,
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
@@ -371,39 +371,40 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1/*, serial2*/], priority = 1)]
+    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1, serial2], priority = 1)]
     fn usb_tx(ctx: usb_tx::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial1 = ctx.shared.serial1;
-        //let mut serial2 = ctx.shared.serial2;
+        let mut serial2 = ctx.shared.serial2;
 
-        if (&mut usb_device, &mut serial1 /*&mut serial2*/).lock(
-            |usb_device, serial1 /*, serial2*/| usb_device.poll(&mut [serial1 /*serial2*/]),
-        ) {
+        if (&mut usb_device, &mut serial1, &mut serial2)
+            .lock(|usb_device, serial1, serial2| usb_device.poll(&mut [serial1, serial2]))
+        {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
         }
     }
 
-    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1/*, serial2*/], priority = 1)]
+    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1, serial2], priority = 1)]
     fn usb_rx0(ctx: usb_rx0::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial1 = ctx.shared.serial1;
-        //let mut serial2 = ctx.shared.serial2;
+        let mut serial2 = ctx.shared.serial2;
 
-        if (&mut usb_device, &mut serial1 /*&mut serial2*/).lock(
-            |usb_device, serial1 /*, serial2*/| usb_device.poll(&mut [serial1 /*serial2*/]),
-        ) {
+        if (&mut usb_device, &mut serial1, &mut serial2)
+            .lock(|usb_device, serial1, serial2| usb_device.poll(&mut [serial1, serial2]))
+        {
             cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
         }
     }
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1/*, serial2*/], local = [])]
+    #[idle(shared=[serial1, serial2], local = [])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
         let mut serial1 = ctx.shared.serial1;
+        let mut serial2 = ctx.shared.serial2;
 
         fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
             if prev.data_rate != new.data_rate()
@@ -412,7 +413,7 @@ mod app {
                 || prev.data_bits != new.data_bits()
             {
                 *prev = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
-                defmt::info!("New LineCoding: {}", prev);
+                defmt::trace!("New LineCoding: {}", prev);
                 true
             } else {
                 false
@@ -420,9 +421,16 @@ mod app {
         }
 
         let mut buf = [0u8; 64];
-        let mut prev_line_coding = serial1.lock(|serial1| unsafe {
-            core::mem::transmute_copy::<_, MyLineCoding>(serial1.line_coding())
-        });
+
+        let mut prev_line_codings = [
+            serial1.lock(|serial1| unsafe {
+                core::mem::transmute_copy::<_, MyLineCoding>(serial1.line_coding())
+            }),
+            serial2.lock(|serial2| unsafe {
+                core::mem::transmute_copy::<_, MyLineCoding>(serial2.line_coding())
+            }),
+        ];
+
         loop {
             cortex_m::interrupt::free(|_| unsafe {
                 cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
@@ -433,7 +441,7 @@ mod app {
 
             // read from serial1
             serial1.lock(|serial1| {
-                if update_line_coding_if_changed(&mut prev_line_coding, serial1.line_coding()) {}
+                if update_line_coding_if_changed(&mut prev_line_codings[0], serial1.line_coding()) {}
                 match serial1.read(&mut buf) {
                     Ok(count) if count > 0 => {
                         if let Ok(result) = core::str::from_utf8(&buf[..count]) {
@@ -446,21 +454,20 @@ mod app {
                 }
             });
 
-            /*
             // read from serial2
-            ctx.shared
-                .serial2
-                .lock(|serial2| match serial2.read(&mut buf) {
+            serial2.lock(|serial2| {
+                if update_line_coding_if_changed(&mut prev_line_codings[1], serial2.line_coding()) {}
+                match serial2.read(&mut buf) {
                     Ok(count) if count > 0 => {
                         if let Ok(result) = core::str::from_utf8(&buf[..count]) {
-                            defmt::debug!("serial2: {} ({} bytes)", result, count);
+                            defmt::debug!("serial1: \"{}\" ({} bytes)", result, count);
                         } else {
-                            defmt::debug!("serial2: {:?} ({} bytes)", &buf[..count], count);
+                            defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
                         }
                     }
                     _ => {}
-                });
-            */
+                }
+            });
         }
     }
 }

@@ -11,14 +11,17 @@ num = { version = "0.4", default-features = false }
 libm = "0.2"
 vcell = "0.1.3"
 heapless = { version = "0.8" }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
 
 embedded-hal = { version = "0.2.7", features = ["unproven"] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"]}
 cortex-m-rt = "0.7"
 
-usb-device = { version = "0.2.8", features = ["defmt", "control-buffer-256"] }
+usb-device = { version = "0.2.9", features = ["defmt", "control-buffer-256"] }
 stm32-usbd = "0.6.0"
 usbd-serial = "0.1.1"
+usbd-hid = { version = "0.6.1", features = ["defmt"] }
+usbd-hid-macros = "0.6.0"
 
 panic-probe = { version = "0.3", features = ["print-defmt"] }
 

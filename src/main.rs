@@ -201,6 +201,41 @@ impl ClockConfigProvider for HighPerformanceClockConfigProvider {
 
 //-----------------------------------------------------------------------------
 
+#[derive(Copy, Clone)]
+pub struct MyLineCoding {
+    pub stop_bits: usbd_serial::StopBits,
+    pub data_bits: u8,
+    pub parity_type: usbd_serial::ParityType,
+    pub data_rate: u32,
+}
+
+impl defmt::Format for MyLineCoding {
+    fn format(&self, fmt: defmt::Formatter) {
+        use usbd_serial::{ParityType, StopBits};
+
+        defmt::write!(
+            fmt,
+            "LineCoding {{ stop_bits: {}, data_bits: {}, parity_type: {}, data_rate: {} }}",
+            match self.stop_bits {
+                StopBits::One => "1",
+                StopBits::OnePointFive => "1.5",
+                StopBits::Two => "2",
+            },
+            self.data_bits,
+            match self.parity_type {
+                ParityType::None => "None",
+                ParityType::Odd => "Odd",
+                ParityType::Event => "Even",
+                ParityType::Mark => "Mark",
+                ParityType::Space => "Space",
+            },
+            self.data_rate
+        );
+    }
+}
+
+//-----------------------------------------------------------------------------
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
     use embedded_hal::blocking::serial;
@@ -342,8 +377,11 @@ mod app {
         let mut serial1 = ctx.shared.serial1;
         //let mut serial2 = ctx.shared.serial2;
 
-        (&mut usb_device, &mut serial1, /*&mut serial2*/)
-            .lock(|usb_device, serial1/*, serial2*/| usb_device.poll(&mut [serial1, /*serial2*/]));
+        if (&mut usb_device, &mut serial1 /*&mut serial2*/).lock(
+            |usb_device, serial1 /*, serial2*/| usb_device.poll(&mut [serial1 /*serial2*/]),
+        ) {
+            cortex_m::peripheral::NVIC::mask(Interrupt::USB_HP_CAN_TX);
+        }
     }
 
     #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1/*, serial2*/], priority = 1)]
@@ -352,34 +390,63 @@ mod app {
         let mut serial1 = ctx.shared.serial1;
         //let mut serial2 = ctx.shared.serial2;
 
-        (&mut usb_device, &mut serial1, /*&mut serial2*/)
-            .lock(|usb_device, serial1/* , serial2*/| usb_device.poll(&mut [serial1, /*serial2*/]));
+        if (&mut usb_device, &mut serial1 /*&mut serial2*/).lock(
+            |usb_device, serial1 /*, serial2*/| usb_device.poll(&mut [serial1 /*serial2*/]),
+        ) {
+            cortex_m::peripheral::NVIC::mask(Interrupt::USB_LP_CAN_RX0);
+        }
     }
 
     //-------------------------------------------------------------------------
 
     #[idle(shared=[serial1/*, serial2*/], local = [])]
-    fn idle(mut ctx: idle::Context) -> ! {
-        loop {
-            let mut buf = [0u8; 64];
+    fn idle(ctx: idle::Context) -> ! {
+        use usbd_serial::LineCoding;
 
-            //let ctrl = serial1.line_coding(); // port config
+        let mut serial1 = ctx.shared.serial1;
+
+        fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
+            if prev.data_rate != new.data_rate()
+                || prev.parity_type != new.parity_type()
+                || prev.stop_bits != new.stop_bits()
+                || prev.data_bits != new.data_bits()
+            {
+                *prev = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
+                defmt::info!("New LineCoding: {}", prev);
+                true
+            } else {
+                false
+            }
+        }
+
+        let mut buf = [0u8; 64];
+        let mut prev_line_coding = serial1.lock(|serial1| unsafe {
+            core::mem::transmute_copy::<_, MyLineCoding>(serial1.line_coding())
+        });
+        loop {
+            cortex_m::interrupt::free(|_| unsafe {
+                cortex_m::peripheral::NVIC::unmask(Interrupt::USB_HP_CAN_TX);
+                cortex_m::peripheral::NVIC::unmask(Interrupt::USB_LP_CAN_RX0);
+
+                cortex_m::asm::wfi();
+            });
 
             // read from serial1
-            ctx.shared
-                .serial1
-                .lock(|serial1| match serial1.read(&mut buf) {
+            serial1.lock(|serial1| {
+                if update_line_coding_if_changed(&mut prev_line_coding, serial1.line_coding()) {}
+                match serial1.read(&mut buf) {
                     Ok(count) if count > 0 => {
                         if let Ok(result) = core::str::from_utf8(&buf[..count]) {
-                            defmt::debug!("serial1: {} ({} bytes)", result, count);
+                            defmt::debug!("serial1: \"{}\" ({} bytes)", result, count);
                         } else {
                             defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
                         }
                     }
                     _ => {}
-                });
+                }
+            });
 
-            /* 
+            /*
             // read from serial2
             ctx.shared
                 .serial2

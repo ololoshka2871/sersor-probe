@@ -50,3 +50,7 @@ br = "bloat -n 5 --release"
 
 rb = "run --bin sersor-probe"
 rrb = "run --release --bin sersor-probe"
+
+# https://github.com/dtolnay/cargo-expand
+[expand]
+color = "always"

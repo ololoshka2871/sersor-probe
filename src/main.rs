@@ -414,12 +414,13 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2], local = [])]
+    #[idle(shared=[serial1, serial2, hid_i2c], local = [])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
         let mut serial1 = ctx.shared.serial1;
         let mut serial2 = ctx.shared.serial2;
+        let mut hid_i2c = ctx.shared.hid_i2c;
 
         fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
             if prev.data_rate != new.data_rate()
@@ -483,6 +484,19 @@ mod app {
                         }
                     }
                     _ => {}
+                }
+            });
+
+            // HID-I2C
+            hid_i2c.lock(|hid_i2c| {
+                let mut buf = [0u8; 64];
+                // Это Output
+                if let Ok(s) = hid_i2c.pull_raw_output(&mut buf) {
+                    defmt::debug!("HID output data: {:?} ({} bytes)", &buf[..s], s);
+                }
+                // Это Feature
+                if let Ok(r) = hid_i2c.pull_raw_report(&mut buf) {
+                    defmt::debug!("HID Feature report {}: {}", r, &buf[..r.len]);
                 }
             });
         }

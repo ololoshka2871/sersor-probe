@@ -2,6 +2,7 @@
 #![no_std]
 #![feature(macro_metavar_expr)]
 
+mod bridge;
 mod config;
 mod hw;
 mod support;
@@ -238,7 +239,8 @@ impl defmt::Format for MyLineCoding {
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
-    use embedded_hal::blocking::serial;
+    use embedded_hal::blocking::{i2c, serial};
+    use systick_monotonic::*;
 
     use super::*;
 
@@ -253,7 +255,9 @@ mod app {
     }
 
     #[local]
-    struct Local {}
+    struct Local {
+        i2c_bridge: bridge::I2CBridge,
+    }
 
     #[monotonic(binds = SysTick, default = true)]
     type MonoTimer = Systick<{ config::SYSTICK_RATE_HZ }>;
@@ -311,7 +315,7 @@ mod app {
         let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
         let hid_i2c = usbd_hid::hid_class::HIDClass::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            support::FT260HidDescriptor::desc(),
+            support::HidDescriptor::desc(),
             config::HID_I2C_POLL_INTERVAL_MS,
         );
 
@@ -359,6 +363,14 @@ mod app {
 
         //---------------------------------------------------------------------
 
+        let i2c_bridge = bridge::I2CBridge::new();
+
+        //---------------------------------------------------------------------
+
+        //i2c_status_report_gen::spawn_after(10u64.millis()).ok();
+
+        //---------------------------------------------------------------------
+
         usb_pull_up.toggle(); // enable USB
         defmt::info!("USB enabled");
 
@@ -373,7 +385,7 @@ mod app {
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
-            Local {},
+            Local { i2c_bridge },
             init::Monotonics(mono),
         )
     }
@@ -414,13 +426,30 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c], local = [])]
+    #[task(shared = [hid_i2c], priority = 3)]
+    fn i2c_status_report_gen(mut ctx: i2c_status_report_gen::Context) {
+        let mut buf = [0u8; 64];
+
+        buf[0] = 0xD0; // Report ID
+        buf[1] = 1 << 5; // bus status [controller idle]
+        ctx.shared
+            .hid_i2c
+            .lock(|hid_i2c| hid_i2c.push_raw_input(&buf).ok());
+
+        i2c_status_report_gen::spawn_after(10u64.millis()).ok();
+    }
+
+    //-------------------------------------------------------------------------
+
+    #[idle(shared=[serial1, serial2, hid_i2c], local = [i2c_bridge])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
         let mut serial1 = ctx.shared.serial1;
         let mut serial2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
+
+        let i2c_bridge = ctx.local.i2c_bridge;
 
         fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
             if prev.data_rate != new.data_rate()
@@ -490,13 +519,20 @@ mod app {
             // HID-I2C
             hid_i2c.lock(|hid_i2c| {
                 let mut buf = [0u8; 64];
+                /*
                 // Это Output
                 if let Ok(s) = hid_i2c.pull_raw_output(&mut buf) {
-                    defmt::debug!("HID output data: {:?} ({} bytes)", &buf[..s], s);
+                    i2c_bridge.data_request(&buf[..s]);
                 }
                 // Это Feature
                 if let Ok(r) = hid_i2c.pull_raw_report(&mut buf) {
-                    defmt::debug!("HID Feature report {}: {}", r, &buf[..r.len]);
+                    i2c_bridge.feature_request(r.report_id, &buf[..r.len]);
+                }
+                */
+                if let Ok(s) = hid_i2c.pull_raw_output(&mut buf) {
+                    //i2c_bridge.data_request(&buf[..s]);
+                    defmt::debug!("HID input data: {}", &buf[..s]);
+                    hid_i2c.push_raw_input(&buf[..s]).ok();
                 }
             });
         }

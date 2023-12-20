@@ -16,8 +16,8 @@ use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Floating, GpioExt, Input, Output, PushPull, PA0, PA1, PA2, PA3, PA4, PA5, PA6, PA7, PA9, PB3,
-    PB4, PB5, PB6, PC13, PC14, PC15,
+    Alternate, Floating, GpioExt, Input, OpenDrain, Output, PushPull, PA0, PA1, PA2, PA3, PA4, PA5,
+    PA6, PA7, PA9, PB3, PB4, PB5, PB6, PB7, PC13, PC14, PC15,
 };
 use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::rcc::{HPre, PPre};
@@ -26,7 +26,7 @@ use stm32f1xx_hal::timer::{PwmChannel, Timer};
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
 use stm32f1xx_hal::dma::dma1;
-use stm32f1xx_hal::pac::{Interrupt, TIM1, TIM2, TIM4};
+use stm32f1xx_hal::pac::{Interrupt, I2C1, TIM1, TIM2, TIM4};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
@@ -240,6 +240,7 @@ impl defmt::Format for MyLineCoding {
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
     use embedded_hal::blocking::{i2c, serial};
+    use serde::de;
     use systick_monotonic::*;
 
     use super::*;
@@ -256,7 +257,10 @@ mod app {
 
     #[local]
     struct Local {
-        i2c_bridge: bridge::I2CBridge,
+        i2c1: stm32f1xx_hal::i2c::BlockingI2c<
+            I2C1,
+            (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>),
+        >,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -333,6 +337,7 @@ mod app {
 
         //---------------------------------------------------------------------
 
+        /*
         // UART1
         let _uart1 = stm32f1xx_hal::serial::Serial::new(
             ctx.device.USART1,
@@ -358,12 +363,28 @@ mod app {
             stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),
             &clocks,
         );
+        */
 
         defmt::info!("Serial ports");
 
         //---------------------------------------------------------------------
 
-        let i2c_bridge = bridge::I2CBridge::new();
+        let i2c1 = stm32f1xx_hal::i2c::BlockingI2c::i2c1(
+            ctx.device.I2C1,
+            (
+                gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
+                gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
+            ),
+            &mut afio.mapr,
+            stm32f1xx_hal::i2c::Mode::Standard {
+                frequency: Hertz::kHz(100),
+            },
+            clocks,
+            1000,
+            2,
+            1000,
+            10000, // должен успеть проходить SCL stretch
+        );
 
         //---------------------------------------------------------------------
 
@@ -385,7 +406,7 @@ mod app {
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
-            Local { i2c_bridge },
+            Local { i2c1 },
             init::Monotonics(mono),
         )
     }
@@ -441,7 +462,7 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c], local = [i2c_bridge])]
+    #[idle(shared=[serial1, serial2, hid_i2c], local = [i2c1])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
@@ -449,7 +470,7 @@ mod app {
         let mut serial2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
 
-        let i2c_bridge = ctx.local.i2c_bridge;
+        let mut i2c = ctx.local.i2c1;
 
         fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
             if prev.data_rate != new.data_rate()
@@ -519,20 +540,19 @@ mod app {
             // HID-I2C
             hid_i2c.lock(|hid_i2c| {
                 let mut buf = [0u8; 64];
-                /*
-                // Это Output
-                if let Ok(s) = hid_i2c.pull_raw_output(&mut buf) {
-                    i2c_bridge.data_request(&buf[..s]);
-                }
-                // Это Feature
-                if let Ok(r) = hid_i2c.pull_raw_report(&mut buf) {
-                    i2c_bridge.feature_request(r.report_id, &buf[..r.len]);
-                }
-                */
-                if let Ok(s) = hid_i2c.pull_raw_output(&mut buf) {
-                    //i2c_bridge.data_request(&buf[..s]);
-                    defmt::debug!("HID input data: {}", &buf[..s]);
-                    hid_i2c.push_raw_input(&buf[..s]).ok();
+                if let Ok(_) = hid_i2c.pull_raw_output(&mut buf) {
+                    match bridge::MyI2COperation::on(&mut buf).execute(i2c) {
+                        Ok(result) => {
+                            defmt::trace!("I2C operation success");
+                            hid_i2c.push_raw_input(result).ok();
+                        }
+                        Err(e) => {
+                            defmt::error!("I2C error: {:?}", e);
+                            buf[0] = e.into();
+                            buf[1] = 0;
+                            hid_i2c.push_raw_input(&buf).ok();
+                        }
+                    }
                 }
             });
         }

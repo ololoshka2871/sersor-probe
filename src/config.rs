@@ -11,6 +11,9 @@ pub const USB_PULLUP_ACTVE_LEVEL: bool = false;
 
 pub const STR_MAX_LEN: usize = 64;
 
+pub const MAX_I2C_SEQUENCE_LEN: usize = 8;
+pub const MAX_I2C_RX_LEN: usize = 32;
+
 //-----------------------------------------------------------------------------
 
 pub const SYSTICK_RATE_HZ: u32 = 1_000;

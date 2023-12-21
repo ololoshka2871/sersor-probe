@@ -168,7 +168,7 @@ where
     I2C: Instance,
 {
     #[allow(clippy::too_many_arguments)]
-    fn configure<M: Into<Mode>>(
+    pub fn configure<M: Into<Mode>>(
         i2c: I2C,
         pins: PINS,
         mode: M,
@@ -185,6 +185,18 @@ where
             data_timeout_us,
             clocks,
         )
+    }
+
+
+}
+
+impl<I2C, PINS> BlockingI2c<I2C, PINS>
+where
+    I2C: Instance,
+{
+    /// Releases the I2C peripheral and associated pins
+    pub fn free(self) -> (I2C, PINS) {
+        (self.nb.i2c, self.nb.pins)
     }
 }
 

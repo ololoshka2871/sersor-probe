@@ -14,7 +14,8 @@ use stm32f1xx_hal::gpio::{self, Alternate, OpenDrain};
 use stm32f1xx_hal::pac::{DWT, I2C1, I2C2, RCC};
 use stm32f1xx_hal::rcc::{BusClock, Clocks, Enable, Reset};
 use stm32f1xx_hal::time::{kHz, Hertz};
-use stm32f1xx_hal::i2c::Instance;
+
+pub use stm32f1xx_hal::i2c::{Instance, Pins}; 
 
 pub mod blocking;
 pub use blocking::BlockingI2c;
@@ -36,13 +37,13 @@ pub enum Error {
     // Alert, // SMBUS mode only
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 pub enum DutyCycle {
     Ratio2to1,
     Ratio16to9,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Mode {
     Standard {
         frequency: Hertz,
@@ -84,38 +85,6 @@ impl From<Hertz> for Mode {
             }
         }
     }
-}
-
-/// Helper trait to ensure that the correct I2C pins are used for the corresponding interface
-pub trait Pins<I2C> {
-    const REMAP: bool;
-}
-
-impl Pins<I2C1>
-    for (
-        gpio::PB6<Alternate<OpenDrain>>,
-        gpio::PB7<Alternate<OpenDrain>>,
-    )
-{
-    const REMAP: bool = false;
-}
-
-impl Pins<I2C1>
-    for (
-        gpio::PB8<Alternate<OpenDrain>>,
-        gpio::PB9<Alternate<OpenDrain>>,
-    )
-{
-    const REMAP: bool = true;
-}
-
-impl Pins<I2C2>
-    for (
-        gpio::PB10<Alternate<OpenDrain>>,
-        gpio::PB11<Alternate<OpenDrain>>,
-    )
-{
-    const REMAP: bool = false;
 }
 
 /// I2C peripheral operating in master mode
@@ -223,7 +192,7 @@ where
     }
 
     /// Perform an I2C software reset
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.i2c.cr1.write(|w| w.pe().set_bit().swrst().set_bit());
         self.i2c.cr1.reset();
         self.init();

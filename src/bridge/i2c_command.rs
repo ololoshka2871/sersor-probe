@@ -76,19 +76,27 @@ impl<'a> MyI2COperation<'a> {
                 Ok(self.data_buff)
             }
             Ok(I2COperation::Speed) => {
-                let new_speed_khz = self.data_buff[1] as u32;
-                defmt::trace!("I2C Speed change to {} kHz", new_speed_khz);
-                let ok = i2c.set_speed(new_speed_khz);
-                Err(if ok {
-                    I2CBridgeError::Ok
+                let new_speed_khz =
+                    systick_monotonic::fugit::Hertz::<u32>::kHz(u16::from_le_bytes([
+                        self.data_buff[1],
+                        self.data_buff[2],
+                    ]) as u32);
+                defmt::trace!("I2C Speed change to {} kHz", new_speed_khz.to_kHz());
+                if i2c.set_speed(new_speed_khz) {
+                    self.data_buff[0] = I2CBridgeError::Ok.into();
+                    self.data_buff[1] = 0;
+                    Ok(self.data_buff)
                 } else {
-                    I2CBridgeError::NotSupported
-                })
+                    Err(I2CBridgeError::NotSupported)
+                }
             }
             Ok(I2COperation::Reset) => {
                 defmt::trace!("I2C Reset");
                 i2c.reset();
-                Err(I2CBridgeError::Ok)
+
+                self.data_buff[0] = I2CBridgeError::Ok.into();
+                self.data_buff[1] = 0;
+                Ok(self.data_buff)
             }
             Err(e) => Err(e),
         }

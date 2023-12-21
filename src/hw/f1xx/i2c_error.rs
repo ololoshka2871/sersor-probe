@@ -10,7 +10,6 @@ impl From<Error> for I2CBridgeError {
             Error::Acknowledge => HwError::Acknowledge,
             Error::Overrun => HwError::Overrun,
             Error::Timeout => HwError::Timeout,
-            _ => HwError::Unknown,
         };
 
         Self::HwError(hw_err)

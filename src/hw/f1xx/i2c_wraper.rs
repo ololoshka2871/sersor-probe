@@ -1,13 +1,63 @@
+use crate::hw::Reset;
+
+use super::{
+    i2c::{BlockingI2c, Error},
+    Mode,
+};
 use embedded_hal::blocking::i2c::{Read, Write};
-use super::i2c::{BlockingI2c, Error};
+use stm32f1xx_hal::i2c::Pins;
+use stm32f1xx_hal::pac::{I2C1, I2C2};
+use stm32f1xx_hal::{afio::MAPR, rcc::Clocks};
 
 pub struct I2cWraper<I2C, PINS> {
     i2c: BlockingI2c<I2C, PINS>,
+    clocks: Clocks,
+    mode: Mode,
 }
 
-impl<I2C, PINS> I2cWraper<I2C, PINS> {
-    pub fn new(i2c: BlockingI2c<I2C, PINS>) -> Self {
-        Self { i2c }
+pub const START_TIMEOUT_US: u32 = 1000;
+pub const START_RETRIES: u8 = 2;
+pub const ADDR_TIMEOUT_US: u32 = 1000;
+pub const DATA_TIMEOUT_US: u32 = 10000; // должен успеть проходить SCL stretch
+
+impl<PINS> I2cWraper<I2C1, PINS>
+where
+    PINS: Pins<I2C1>,
+{
+    pub fn i2c1(i2c1: I2C1, pins: PINS, mapr: &mut MAPR, clocks: Clocks, mode: Mode) -> Self {
+        let i2c = crate::hw::BlockingI2c::i2c1(
+            i2c1,
+            pins,
+            mapr,
+            mode,
+            clocks,
+            START_TIMEOUT_US,
+            START_RETRIES,
+            ADDR_TIMEOUT_US,
+            DATA_TIMEOUT_US,
+        );
+
+        Self { i2c, clocks, mode }
+    }
+}
+
+impl<PINS> I2cWraper<I2C2, PINS>
+where
+    PINS: Pins<I2C2>,
+{
+    pub fn i2c2(i2c2: I2C2, pins: PINS, clocks: Clocks, mode: Mode) -> Self {
+        let i2c = crate::hw::BlockingI2c::i2c2(
+            i2c2,
+            pins,
+            mode,
+            clocks,
+            START_TIMEOUT_US,
+            START_RETRIES,
+            ADDR_TIMEOUT_US,
+            DATA_TIMEOUT_US,
+        );
+
+        Self { i2c, clocks, mode }
     }
 }
 
@@ -39,8 +89,27 @@ impl<I2C, PINS> super::super::Reconfigure for I2cWraper<I2C, PINS>
 where
     I2C: stm32f1xx_hal::i2c::Instance,
 {
-    fn set_speed(&mut self, _speed: u32) -> bool {
-        false
+    fn set_speed(&mut self, speed: systick_monotonic::fugit::Hertz<u32>) -> bool {
+        use stm32f1xx_hal::time::Hertz;
+
+        match speed.to_kHz() {
+            0..=100 => {
+                self.mode = Mode::Standard {
+                    frequency: Hertz::kHz(100),
+                }
+            }
+            101..=400 => {
+                self.mode = Mode::Fast {
+                    frequency: Hertz::kHz(400),
+                    duty_cycle: super::i2c::DutyCycle::Ratio16to9,
+                }
+            }
+            _ => return false,
+        }
+
+        self.reset();
+
+        true
     }
 }
 
@@ -49,6 +118,21 @@ where
     I2C: stm32f1xx_hal::i2c::Instance,
 {
     fn reset(&mut self) {
-        //self.i2c.
+        #[allow(invalid_value)]
+        let mut memory = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
+
+        core::mem::swap(&mut self.i2c, &mut memory);
+
+        let (i2c, pins) = memory.free();
+        self.i2c = BlockingI2c::<I2C, PINS>::configure(
+            i2c,
+            pins,
+            self.mode,
+            self.clocks,
+            START_TIMEOUT_US,
+            START_RETRIES,
+            ADDR_TIMEOUT_US,
+            DATA_TIMEOUT_US,
+        );
     }
 }

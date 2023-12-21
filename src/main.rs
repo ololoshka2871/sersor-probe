@@ -364,24 +364,18 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let i2c = crate::hw::BlockingI2c::i2c1(
+        let i2c_wraper = hw::I2cWraper::i2c1(
             ctx.device.I2C1,
             (
                 gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
                 gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
             ),
             &mut afio.mapr,
+            clocks,
             hw::Mode::Standard {
                 frequency: Hertz::kHz(100),
             },
-            clocks,
-            1000,
-            2,
-            1000,
-            10000, // должен успеть проходить SCL stretch
         );
-
-        let i2c_wraper = hw::I2cWraper::new(i2c);
 
         //---------------------------------------------------------------------
 

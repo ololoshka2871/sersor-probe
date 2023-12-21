@@ -2,7 +2,7 @@
 #![no_std]
 #![feature(macro_metavar_expr)]
 
-mod bridge;
+pub mod bridge;
 mod config;
 mod hw;
 mod support;
@@ -239,8 +239,6 @@ impl defmt::Format for MyLineCoding {
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
-    use embedded_hal::blocking::{i2c, serial};
-    use serde::de;
     use systick_monotonic::*;
 
     use super::*;
@@ -257,10 +255,7 @@ mod app {
 
     #[local]
     struct Local {
-        i2c1: stm32f1xx_hal::i2c::BlockingI2c<
-            I2C1,
-            (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>),
-        >,
+        i2c: hw::I2cWraper<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -369,7 +364,7 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let i2c1 = stm32f1xx_hal::i2c::BlockingI2c::i2c1(
+        let i2c = stm32f1xx_hal::i2c::BlockingI2c::i2c1(
             ctx.device.I2C1,
             (
                 gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
@@ -385,6 +380,8 @@ mod app {
             1000,
             10000, // должен успеть проходить SCL stretch
         );
+
+        let i2c_wraper = hw::I2cWraper::new(i2c);
 
         //---------------------------------------------------------------------
 
@@ -406,7 +403,7 @@ mod app {
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
-            Local { i2c1 },
+            Local { i2c: i2c_wraper },
             init::Monotonics(mono),
         )
     }
@@ -462,7 +459,7 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c], local = [i2c1])]
+    #[idle(shared=[serial1, serial2, hid_i2c], local = [i2c])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
@@ -470,7 +467,7 @@ mod app {
         let mut serial2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
 
-        let mut i2c = ctx.local.i2c1;
+        let i2c = ctx.local.i2c;
 
         fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
             if prev.data_rate != new.data_rate()

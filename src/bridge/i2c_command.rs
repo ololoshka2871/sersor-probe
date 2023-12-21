@@ -8,6 +8,8 @@ enum I2COperation {
     Write,
     /// Speed control
     Speed,
+    /// Reset i2c bus
+    Reset,
 }
 
 impl TryFrom<u8> for I2COperation {
@@ -18,6 +20,7 @@ impl TryFrom<u8> for I2COperation {
             0x0B => Ok(I2COperation::Read),
             0x0A => Ok(I2COperation::Write),
             0x10 => Ok(I2COperation::Speed),
+            0x69 => Ok(I2COperation::Reset),
             _ => Err(I2CBridgeError::InvalidCommand(value)),
         }
     }
@@ -34,7 +37,7 @@ impl<'a> MyI2COperation<'a> {
 
     pub fn execute<I2C>(self, i2c: &mut I2C) -> Result<&'a [u8], I2CBridgeError>
     where
-        I2C: Read + Write,
+        I2C: Read + Write + crate::hw::Reconfigure + crate::hw::Reset,
         I2CBridgeError: From<<I2C as embedded_hal::blocking::i2c::Read>::Error>
             + From<<I2C as embedded_hal::blocking::i2c::Write>::Error>,
     {
@@ -73,8 +76,19 @@ impl<'a> MyI2COperation<'a> {
                 Ok(self.data_buff)
             }
             Ok(I2COperation::Speed) => {
-                defmt::trace!("I2C Speed control not supported");
-                Err(I2CBridgeError::NotSupported)
+                let new_speed_khz = self.data_buff[1] as u32;
+                defmt::trace!("I2C Speed change to {} kHz", new_speed_khz);
+                let ok = i2c.set_speed(new_speed_khz);
+                Err(if ok {
+                    I2CBridgeError::Ok
+                } else {
+                    I2CBridgeError::NotSupported
+                })
+            }
+            Ok(I2COperation::Reset) => {
+                defmt::trace!("I2C Reset");
+                i2c.reset();
+                Err(I2CBridgeError::Ok)
             }
             Err(e) => Err(e),
         }

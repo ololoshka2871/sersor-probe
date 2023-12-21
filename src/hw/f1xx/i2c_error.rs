@@ -1,6 +1,6 @@
 use stm32f1xx_hal::i2c::Error;
 
-use crate::bridge::{HwError, I2CBridgeError};
+pub use crate::bridge::{HwError, I2CBridgeError};
 
 impl From<Error> for I2CBridgeError {
     fn from(e: Error) -> Self {

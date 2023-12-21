@@ -275,7 +275,7 @@ mod app {
 
         let mut flash = ctx.device.FLASH.constrain();
 
-        let dma_channels = ctx.device.DMA1.split();
+        let _dma_channels = ctx.device.DMA1.split(); // for defmt
 
         let mut gpioa = ctx.device.GPIOA.split();
         let mut gpiob = ctx.device.GPIOB.split();
@@ -364,14 +364,14 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let i2c = stm32f1xx_hal::i2c::BlockingI2c::i2c1(
+        let i2c = crate::hw::BlockingI2c::i2c1(
             ctx.device.I2C1,
             (
                 gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
                 gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
             ),
             &mut afio.mapr,
-            stm32f1xx_hal::i2c::Mode::Standard {
+            hw::Mode::Standard {
                 frequency: Hertz::kHz(100),
             },
             clocks,

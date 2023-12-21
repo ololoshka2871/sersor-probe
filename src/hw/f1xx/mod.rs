@@ -1,3 +1,6 @@
+mod i2c;
+pub use i2c::*;
+
 mod i2c_wraper;
 pub use i2c_wraper::I2cWraper;
 

@@ -1,4 +1,4 @@
-use stm32f1xx_hal::i2c::Error;
+use super::i2c::Error;
 
 pub use crate::bridge::{HwError, I2CBridgeError};
 

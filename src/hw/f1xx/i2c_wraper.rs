@@ -1,5 +1,5 @@
 use embedded_hal::blocking::i2c::{Read, Write};
-use stm32f1xx_hal::i2c::{BlockingI2c, Error};
+use super::i2c::{BlockingI2c, Error};
 
 pub struct I2cWraper<I2C, PINS> {
     i2c: BlockingI2c<I2C, PINS>,

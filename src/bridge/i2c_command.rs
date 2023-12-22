@@ -46,7 +46,7 @@ impl<'a> MyI2COperation<'a> {
             Ok(I2COperation::Read) => {
                 let len = self.data_buff[1] as usize;
                 if len < 1 || len > 60 {
-                    return Err(I2CBridgeError::ProtocolError);
+                    return Err(I2CBridgeError::LengthError);
                 }
                 let dev_addr = self.data_buff[2];
                 let dest = &mut self.data_buff[2..2 + len];
@@ -61,8 +61,8 @@ impl<'a> MyI2COperation<'a> {
             }
             Ok(I2COperation::Write) => {
                 let len = self.data_buff[1] as usize;
-                if len < 2 || len > 60 {
-                    return Err(I2CBridgeError::ProtocolError);
+                if len < 2 || len > 61 {
+                    return Err(I2CBridgeError::LengthError);
                 }
                 let dev_addr = self.data_buff[2];
                 let src = &self.data_buff[3..3 + len - 1];

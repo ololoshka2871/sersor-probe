@@ -16,24 +16,16 @@ use rtic::app;
 use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
-use stm32f1xx_hal::gpio::{
-    Alternate, Floating, GpioExt, Input, OpenDrain, Output, PushPull, PA0, PA1, PA2, PA3, PA4, PA5,
-    PA6, PA7, PA9, PB3, PB4, PB5, PB6, PB7, PC13, PC14, PC15,
-};
-use stm32f1xx_hal::prelude::*;
+use stm32f1xx_hal::gpio::{Alternate, GpioExt, OpenDrain, PB6, PB7};
 use stm32f1xx_hal::rcc::{HPre, PPre};
 use stm32f1xx_hal::time::Hertz;
-use stm32f1xx_hal::timer::{PwmChannel, Timer};
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
-use stm32f1xx_hal::dma::dma1;
-use stm32f1xx_hal::pac::{Interrupt, I2C1, TIM1, TIM2, TIM4};
+use stm32f1xx_hal::pac::{Interrupt, I2C1};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
 use usbd_serial::CdcAcmClass;
-
-use systick_monotonic::Systick;
 
 use support::clocking::{ClockConfigProvider, MyConfig};
 
@@ -247,9 +239,11 @@ pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2
 
 //-----------------------------------------------------------------------------
 
-#[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
+#[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FSMC, ADC3, FLASH])]
 mod app {
     use systick_monotonic::*;
+
+    use crate::devices::ValuesStorage;
 
     use super::*;
 
@@ -259,14 +253,18 @@ mod app {
         serial1: CdcAcmClass<'static, UsbBus<Peripheral>>,
         serial2: CdcAcmClass<'static, UsbBus<Peripheral>>,
         hid_i2c: usbd_hid::hid_class::HIDClass<'static, UsbBus<Peripheral>>,
+
         i2c: TsensorI2c,
+        i2c_scan_addr: u8,
         //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
         //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
     }
 
     #[local]
     struct Local {
-        i2c_scan_addr: u8,
+        i2c_device:
+            Option<&'static dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>>,
+        i2c_error_count: u8,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -288,12 +286,12 @@ mod app {
 
         let _dma_channels = ctx.device.DMA1.split(); // for defmt
 
-        let mut gpioa = ctx.device.GPIOA.split();
+        let gpioa = ctx.device.GPIOA.split();
         let mut gpiob = ctx.device.GPIOB.split();
-        let mut gpioc = ctx.device.GPIOC.split();
+        let mut _gpioc = ctx.device.GPIOC.split();
 
         let mut afio = ctx.device.AFIO.constrain();
-        let (pa15, pb3, pb4) = afio.mapr.disable_jtag(gpioa.pa15, gpiob.pb3, gpiob.pb4);
+        let (_pa15, _pb3, _pb4) = afio.mapr.disable_jtag(gpioa.pa15, gpiob.pb3, gpiob.pb4);
 
         let mut usb_pull_up = gpiob.pb8.into_push_pull_output_with_state(
             &mut gpiob.crh,
@@ -415,11 +413,13 @@ mod app {
                 serial2,
                 hid_i2c,
                 i2c: i2c_wraper,
+                i2c_scan_addr: config::I2C_ADDR_MIN,
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
             Local {
-                i2c_scan_addr: config::I2C_ADDR_MIN,
+                i2c_device: None,
+                i2c_error_count: 0,
             },
             init::Monotonics(mono),
         )
@@ -461,25 +461,19 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [i2c], local=[i2c_scan_addr], priority = 1)]
+    #[task(shared = [i2c, i2c_scan_addr], priority = 1)]
     fn i2c_scan(ctx: i2c_scan::Context) {
-        let scan_addr = ctx.local.i2c_scan_addr;
+        let mut scan_addr = ctx.shared.i2c_scan_addr;
         let mut i2c = ctx.shared.i2c;
 
-        defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
-
-        i2c.lock(|i2c| {
+        (&mut i2c, &mut scan_addr).lock(|i2c, scan_addr| {
             let mut buf = [0u8; 4];
+
+            defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
             match bridge::MyI2COperation::new_scan_op(&mut buf, *scan_addr).execute(i2c) {
                 Ok(_) => {
                     defmt::info!("...something detected!");
-                    for dev in I2C_DEVICES {
-                        if let Err(e) = dev.probe(*scan_addr, i2c) {
-                            defmt::error!("{} error: {:?}", dev.name(), e);
-                        } else {
-                            defmt::info!("{} found!", dev.name());
-                        }
-                    }
+                    inquary_i2c::spawn_after(50u64.millis()).ok();
                 }
                 Err(_) => {
                     defmt::trace!("...not found");
@@ -489,6 +483,45 @@ mod app {
                         *scan_addr = config::I2C_ADDR_MIN;
                     }
                     i2c_scan::spawn_after(50u64.millis()).ok();
+                }
+            }
+        });
+    }
+
+    #[task(shared = [i2c, i2c_scan_addr], local=[i2c_device, i2c_error_count], priority = 1)]
+    fn inquary_i2c(ctx: inquary_i2c::Context) {
+        let mut addr = ctx.shared.i2c_scan_addr;
+        let mut i2c = ctx.shared.i2c;
+        let device = ctx.local.i2c_device;
+        let i2c_error_count = ctx.local.i2c_error_count;
+
+        (&mut i2c, &mut addr).lock(|i2c, addr| {
+            if let Some(dev) = device {
+                let mut storage = heapless::Vec::<u8, 64>::new();
+                storage.resize(dev.data_size(), 0).ok();
+                if let Err(e) = dev.read(*addr, &mut storage, i2c) {
+                    defmt::error!("{} at {} error: {}", dev.name(), addr, e);
+                    *i2c_error_count += 1;
+                    if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
+                        defmt::error!("{} at {} not responding", dev.name(), addr);
+                        i2c_scan::spawn_after(50u64.millis()).ok();
+                    }
+                } else {
+                    defmt::info!("{} at {} result: {}", dev.name(), addr, storage.print());
+                    inquary_i2c::spawn_after(250u64.millis()).ok(); // next read
+                }
+            } else {
+                for dev in I2C_DEVICES {
+                    if let Err(e) = dev.probe(*addr, i2c) {
+                        defmt::error!("{} error: {:?}", dev.name(), e);
+                    } else {
+                        defmt::info!("{} found!", dev.name());
+
+                        device.replace(*dev);
+                        *i2c_error_count = 0;
+
+                        inquary_i2c::spawn_after(500u64.millis()).ok();
+                    }
                 }
             }
         });

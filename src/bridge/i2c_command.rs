@@ -32,6 +32,7 @@ pub struct MyI2COperation<'a> {
 
 impl<'a> MyI2COperation<'a> {
     pub const MIN_BUF_SIZE: usize = 4;
+    pub const MAX_BUF_SIZE: usize = 64;
 
     pub fn on(data_buff: &'a mut [u8]) -> Self {
         Self { data_buff }

@@ -1,6 +1,6 @@
 use embedded_hal::blocking::i2c::{Read, Write};
 
-use crate::bridge::{Builder, Execute, I2CBridgeError, MyI2COperation};
+use crate::bridge::I2CBridgeError;
 
 use super::traits::{I2CAddress, I2CDevice};
 
@@ -44,6 +44,6 @@ where
         I2CBridgeError: From<<I2C as embedded_hal::blocking::i2c::Read>::Error>
             + From<<I2C as embedded_hal::blocking::i2c::Write>::Error>,
     {
-        todo!()
+        super::read_comon::read_i2c_leacy_pic::<I2C, Self::Error>(addr, dest, i2c)
     }
 }

@@ -6,6 +6,4 @@ mod modbus_device;
 pub trait ValuesStorage: core::fmt::Debug {
     fn size(&self) -> u8;
     fn copy_from(&mut self, src: &[u8]);
-    fn render(&self);
-    fn print(&self) -> crate::config::HlString;
 }

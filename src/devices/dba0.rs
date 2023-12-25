@@ -1,6 +1,6 @@
 use embedded_hal::blocking::i2c::{Read, Write};
 
-use crate::bridge::I2CBridgeError;
+use crate::{bridge::I2CBridgeError, config::HlString};
 
 use super::traits::{I2CAddress, I2CDevice};
 
@@ -33,17 +33,39 @@ where
         }
     }
 
-    fn read(
-        &self,
-        addr: I2CAddress,
-        dest: &mut dyn super::traits::ValuesStorage,
-        i2c: &mut I2C,
-    ) -> Result<(), Self::Error>
+    fn read(&self, addr: I2CAddress, dest: &mut [u8], i2c: &mut I2C) -> Result<(), Self::Error>
     where
         I2C: Read + Write + crate::hw::Reconfigure + crate::hw::Reset,
         I2CBridgeError: From<<I2C as embedded_hal::blocking::i2c::Read>::Error>
             + From<<I2C as embedded_hal::blocking::i2c::Write>::Error>,
     {
+        assert!(dest.len() == <Self as I2CDevice<I2C>>::data_size(self));
         super::read_comon::read_i2c_leacy_pic::<I2C, Self::Error>(addr, dest, i2c)
+    }
+
+    fn render(&self, _data: &[u8]) {
+        defmt::trace!("ValuesStorage::render()");
+    }
+
+    fn print(&self, data: &[u8]) -> HlString {
+        use core::fmt::Write;
+        use tbytes::TBytesReaderFor;
+
+        const NAMES: [&str; 4] = ["P", "T", "FP", "FT"];
+
+        let mut s = HlString::new();
+        write!(s, "{}::print {{ ", <Self as I2CDevice<I2C>>::name(self)).ok();
+        let data = tbytes::TBytesReader::from(data);
+        for n in NAMES.iter() {
+            write!(
+                s,
+                "{}={} ",
+                n,
+                crate::support::format_float_simple(data.read().unwrap(), 2)
+            )
+            .ok();
+        }
+        write!(s, "}}").ok();
+        s
     }
 }

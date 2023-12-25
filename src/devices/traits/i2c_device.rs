@@ -21,7 +21,13 @@ where
     fn read(
         &self,
         addr: I2CAddress,
-        dest: &mut dyn super::ValuesStorage,
+        dest: &mut [u8],
         i2c: &mut I2C,
     ) -> Result<(), Self::Error>;
+
+    /// Render values to display.
+    fn render(&self, data: &[u8]);
+
+    /// Print values to string.
+    fn print(&self, data: &[u8]) -> crate::config::HlString;
 }

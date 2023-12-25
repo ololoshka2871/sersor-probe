@@ -13,6 +13,7 @@ vcell = "0.1.3"
 heapless = { version = "0.8", features = ["defmt-03"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 nb = "1"
+tbytes = { git = "https://gitlab.com/mavka/libs/t-bytes.git", branch = "main" }
 
 embedded-hal = { version = "0.2.7", features = ["unproven"] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"]}

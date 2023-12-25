@@ -243,8 +243,6 @@ pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2
 mod app {
     use systick_monotonic::*;
 
-    use crate::devices::ValuesStorage;
-
     use super::*;
 
     #[shared]
@@ -507,7 +505,7 @@ mod app {
                         i2c_scan::spawn_after(50u64.millis()).ok();
                     }
                 } else {
-                    defmt::info!("{} at {} result: {}", dev.name(), addr, storage.print());
+                    defmt::info!("{} at {} result: {}", dev.name(), addr, dev.print(&storage));
                     inquary_i2c::spawn_after(250u64.millis()).ok(); // next read
                 }
             } else {

@@ -4,6 +4,7 @@
 
 pub mod bridge;
 mod config;
+mod devices;
 mod hw;
 mod support;
 
@@ -30,11 +31,13 @@ use stm32f1xx_hal::pac::{Interrupt, I2C1, TIM1, TIM2, TIM4};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
-use usbd_serial::SerialPort;
+use usbd_serial::CdcAcmClass;
 
 use systick_monotonic::Systick;
 
 use support::clocking::{ClockConfigProvider, MyConfig};
+
+use crate::bridge::{Builder, Execute};
 
 use hw::clock_config_48::{
     ADC_DEVIDER, AHB_DEVIDER, APB1_DEVIDER, APB2_DEVIDER, PLL_MUL, PLL_P_DIV, USB_DEVIDER,
@@ -237,6 +240,13 @@ impl defmt::Format for MyLineCoding {
 
 //-----------------------------------------------------------------------------
 
+type TsensorI2c = hw::I2cWraper<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>;
+
+pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
+    &[&devices::DeviceDba0];
+
+//-----------------------------------------------------------------------------
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM])]
 mod app {
     use systick_monotonic::*;
@@ -246,16 +256,17 @@ mod app {
     #[shared]
     struct Shared {
         usb_device: UsbDevice<'static, UsbBusType>,
-        serial1: SerialPort<'static, UsbBus<Peripheral>>,
-        serial2: SerialPort<'static, UsbBus<Peripheral>>,
+        serial1: CdcAcmClass<'static, UsbBus<Peripheral>>,
+        serial2: CdcAcmClass<'static, UsbBus<Peripheral>>,
         hid_i2c: usbd_hid::hid_class::HIDClass<'static, UsbBus<Peripheral>>,
+        i2c: TsensorI2c,
         //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
         //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
     }
 
     #[local]
     struct Local {
-        i2c: hw::I2cWraper<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>,
+        i2c_scan_addr: u8,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -310,8 +321,14 @@ mod app {
             USB_BUS.replace(UsbBus::new(usb));
         }
 
-        let serial1 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
-        let serial2 = SerialPort::new(unsafe { USB_BUS.as_ref().unwrap_unchecked() });
+        let serial1 = CdcAcmClass::new(
+            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
+            config::CDC_ACM_MAX_PACKET_SIZE,
+        );
+        let serial2 = CdcAcmClass::new(
+            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
+            config::CDC_ACM_MAX_PACKET_SIZE,
+        );
         let hid_i2c = usbd_hid::hid_class::HIDClass::new(
             unsafe { USB_BUS.as_ref().unwrap_unchecked() },
             support::HidDescriptor::desc(),
@@ -328,7 +345,7 @@ mod app {
         .composite_with_iads()
         .build();
 
-        defmt::info!("USB device");
+        defmt::info!("USB composite device");
 
         //---------------------------------------------------------------------
 
@@ -377,9 +394,12 @@ mod app {
             },
         );
 
+        defmt::info!("I2C sensor port");
+
         //---------------------------------------------------------------------
 
-        //i2c_status_report_gen::spawn_after(10u64.millis()).ok();
+        i2c_scan::spawn_after(100u64.millis()).ok();
+        defmt::info!("Spawn I2C scan task");
 
         //---------------------------------------------------------------------
 
@@ -394,17 +414,20 @@ mod app {
                 serial1,
                 serial2,
                 hid_i2c,
+                i2c: i2c_wraper,
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
-            Local { i2c: i2c_wraper },
+            Local {
+                i2c_scan_addr: config::I2C_ADDR_MIN,
+            },
             init::Monotonics(mono),
         )
     }
 
     //-------------------------------------------------------------------------
 
-    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1, serial2, hid_i2c], priority = 1)]
+    #[task(binds = USB_HP_CAN_TX, shared = [usb_device, serial1, serial2, hid_i2c], priority = 5)]
     fn usb_tx(ctx: usb_tx::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial1 = ctx.shared.serial1;
@@ -420,7 +443,7 @@ mod app {
         }
     }
 
-    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1, serial2, hid_i2c], priority = 1)]
+    #[task(binds = USB_LP_CAN_RX0, shared = [usb_device, serial1, serial2, hid_i2c], priority = 5)]
     fn usb_rx0(ctx: usb_rx0::Context) {
         let mut usb_device = ctx.shared.usb_device;
         let mut serial1 = ctx.shared.serial1;
@@ -438,22 +461,42 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [hid_i2c], priority = 3)]
-    fn i2c_status_report_gen(mut ctx: i2c_status_report_gen::Context) {
-        let mut buf = [0u8; 64];
+    #[task(shared = [i2c], local=[i2c_scan_addr], priority = 1)]
+    fn i2c_scan(ctx: i2c_scan::Context) {
+        let scan_addr = ctx.local.i2c_scan_addr;
+        let mut i2c = ctx.shared.i2c;
 
-        buf[0] = 0xD0; // Report ID
-        buf[1] = 1 << 5; // bus status [controller idle]
-        ctx.shared
-            .hid_i2c
-            .lock(|hid_i2c| hid_i2c.push_raw_input(&buf).ok());
+        defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
 
-        i2c_status_report_gen::spawn_after(10u64.millis()).ok();
+        i2c.lock(|i2c| {
+            let mut buf = [0u8; 4];
+            match bridge::MyI2COperation::new_scan_op(&mut buf, *scan_addr).execute(i2c) {
+                Ok(_) => {
+                    defmt::info!("...something detected!");
+                    for dev in I2C_DEVICES {
+                        if let Err(e) = dev.probe(*scan_addr, i2c) {
+                            defmt::error!("{} error: {:?}", dev.name(), e);
+                        } else {
+                            defmt::info!("{} found!", dev.name());
+                        }
+                    }
+                }
+                Err(_) => {
+                    defmt::trace!("...not found");
+                    *scan_addr += 1;
+
+                    if *scan_addr > config::I2C_ADDR_MIN_MAX {
+                        *scan_addr = config::I2C_ADDR_MIN;
+                    }
+                    i2c_scan::spawn_after(50u64.millis()).ok();
+                }
+            }
+        });
     }
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c], local = [i2c])]
+    #[idle(shared=[serial1, serial2, hid_i2c, i2c], local = [])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
@@ -461,7 +504,7 @@ mod app {
         let mut serial2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
 
-        let i2c = ctx.local.i2c;
+        let mut i2c = ctx.shared.i2c;
 
         fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
             if prev.data_rate != new.data_rate()
@@ -477,7 +520,7 @@ mod app {
             }
         }
 
-        let mut buf = [0u8; 64];
+        let mut buf = [0u8; config::CDC_ACM_MAX_PACKET_SIZE as usize];
 
         let mut prev_line_codings = [
             serial1.lock(|serial1| unsafe {
@@ -500,7 +543,7 @@ mod app {
             serial1.lock(|serial1| {
                 if update_line_coding_if_changed(&mut prev_line_codings[0], serial1.line_coding()) {
                 }
-                match serial1.read(&mut buf) {
+                match serial1.read_packet(&mut buf) {
                     Ok(count) if count > 0 => {
                         if let Ok(result) = core::str::from_utf8(&buf[..count]) {
                             defmt::debug!("serial1: \"{}\" ({} bytes)", result, count);
@@ -516,7 +559,7 @@ mod app {
             serial2.lock(|serial2| {
                 if update_line_coding_if_changed(&mut prev_line_codings[1], serial2.line_coding()) {
                 }
-                match serial2.read(&mut buf) {
+                match serial2.read_packet(&mut buf) {
                     Ok(count) if count > 0 => {
                         if let Ok(result) = core::str::from_utf8(&buf[..count]) {
                             defmt::debug!("serial1: \"{}\" ({} bytes)", result, count);
@@ -529,7 +572,7 @@ mod app {
             });
 
             // HID-I2C
-            hid_i2c.lock(|hid_i2c| {
+            (&mut hid_i2c, &mut i2c).lock(|hid_i2c, i2c| {
                 let mut buf = [0u8; 64];
                 if let Ok(_) = hid_i2c.pull_raw_output(&mut buf) {
                     match bridge::MyI2COperation::on(&mut buf).execute(i2c) {

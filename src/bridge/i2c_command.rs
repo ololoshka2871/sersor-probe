@@ -3,13 +3,13 @@ use embedded_hal::blocking::i2c::{Read, Write};
 
 enum I2COperation {
     /// Read data into the provided buffer
-    Read,
+    Read = 0x0B,
     /// Write data from the provided buffer
-    Write,
+    Write = 0x0A,
     /// Speed control
-    Speed,
+    Speed = 0x10,
     /// Reset i2c bus
-    Reset,
+    Reset = 0x69,
 }
 
 impl TryFrom<u8> for I2COperation {
@@ -31,11 +31,40 @@ pub struct MyI2COperation<'a> {
 }
 
 impl<'a> MyI2COperation<'a> {
+    pub const MIN_BUF_SIZE: usize = 4;
+
     pub fn on(data_buff: &'a mut [u8]) -> Self {
         Self { data_buff }
     }
+}
 
-    pub fn execute<I2C>(self, i2c: &mut I2C) -> Result<&'a [u8], I2CBridgeError>
+impl<'a> super::Builder<'a> for MyI2COperation<'a> {
+    fn new_scan_op(data_buff: &'a mut [u8; 4], scan_addr: u8) -> Self {
+        data_buff[0] = I2COperation::Read as u8;
+        data_buff[1] = 1; // len
+        data_buff[2] = scan_addr; // addr
+        data_buff[3] = 0; // data storage place
+        Self { data_buff }
+    }
+
+    fn new_read_op(data_buff: &'a mut [u8], dev_addr: u8, size: u8) -> Self {
+        data_buff[0] = I2COperation::Read as u8;
+        data_buff[1] = size; // len
+        data_buff[2] = dev_addr; // addr
+        Self { data_buff }
+    }
+
+    fn new_write_op(data_buff: &'a mut [u8], dev_addr: u8, to_write: &'a [u8]) -> Self {
+        data_buff[0] = I2COperation::Write as u8;
+        data_buff[1] = to_write.len() as u8 + 1; // len + dev_addr
+        data_buff[2] = dev_addr; // addr
+        data_buff[3..3 + to_write.len()].copy_from_slice(to_write);
+        Self { data_buff }
+    }
+}
+
+impl<'a> super::Execute<'a> for MyI2COperation<'a> {
+    fn execute<I2C>(self, i2c: &mut I2C) -> Result<&'a [u8], I2CBridgeError>
     where
         I2C: Read + Write + crate::hw::Reconfigure + crate::hw::Reset,
         I2CBridgeError: From<<I2C as embedded_hal::blocking::i2c::Read>::Error>

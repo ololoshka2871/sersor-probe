@@ -16,6 +16,7 @@ target/
 # doc
 *.pdf
 !SensorPlobe.pdf
+!maket_board.pdf
 
 # gen
 test/protocol_pb2.py

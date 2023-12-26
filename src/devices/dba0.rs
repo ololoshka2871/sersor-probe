@@ -54,7 +54,7 @@ where
         const NAMES: [&str; 4] = ["P", "T", "FP", "FT"];
 
         let mut s = HlString::new();
-        write!(s, "{}::print {{ ", <Self as I2CDevice<I2C>>::name(self)).ok();
+        write!(s, "{}::output {{ ", <Self as I2CDevice<I2C>>::name(self)).ok();
         let data = tbytes::TBytesReader::from(data);
         for n in NAMES.iter() {
             write!(

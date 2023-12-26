@@ -16,12 +16,13 @@ use rtic::app;
 use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
-use stm32f1xx_hal::gpio::{Alternate, GpioExt, OpenDrain, PB6, PB7};
+use stm32f1xx_hal::gpio::{Alternate, GpioExt, OpenDrain, Output, PA1, PA3, PA5, PA7, PB6, PB7};
 use stm32f1xx_hal::rcc::{HPre, PPre};
+use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 use stm32f1xx_hal::time::Hertz;
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
-use stm32f1xx_hal::pac::{Interrupt, I2C1};
+use stm32f1xx_hal::pac::{Interrupt, I2C1, SPI1};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
@@ -239,6 +240,15 @@ pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2
 
 //-----------------------------------------------------------------------------
 
+// Global allocator
+extern crate alloc;
+use embedded_alloc::Heap;
+
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
+
+//-----------------------------------------------------------------------------
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FSMC, ADC3, FLASH])]
 mod app {
     use systick_monotonic::*;
@@ -254,6 +264,14 @@ mod app {
 
         i2c: TsensorI2c,
         i2c_scan_addr: u8,
+
+        display: ssd1309::mode::GraphicsMode<
+            display_interface_spi::SPIInterface<
+                Spi<SPI1, Spi1NoRemap, (PA5<Alternate>, NoMiso, PA7<Alternate>), u8>,
+                PA3<Output>,
+                PA1<Output>,
+            >,
+        >,
         //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
         //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
     }
@@ -284,7 +302,7 @@ mod app {
 
         let _dma_channels = ctx.device.DMA1.split(); // for defmt
 
-        let gpioa = ctx.device.GPIOA.split();
+        let mut gpioa = ctx.device.GPIOA.split();
         let mut gpiob = ctx.device.GPIOB.split();
         let mut _gpioc = ctx.device.GPIOC.split();
 
@@ -302,8 +320,6 @@ mod app {
 
         let clocks = HighPerformanceClockConfigProvider::freeze(&mut flash.acr);
         defmt::info!("Clocks: {}", defmt::Debug2Format(&clocks));
-
-        let mono = Systick::new(ctx.core.SYST, clocks.sysclk().to_Hz());
 
         //---------------------------------------------------------------------
 
@@ -394,6 +410,41 @@ mod app {
 
         //---------------------------------------------------------------------
 
+        let di = display_interface_spi::SPIInterface::new(
+            stm32f1xx_hal::spi::Spi::spi1(
+                ctx.device.SPI1,
+                (
+                    gpioa.pa5.into_alternate_push_pull(&mut gpioa.crl),
+                    stm32f1xx_hal::spi::NoMiso,
+                    gpioa.pa7.into_alternate_push_pull(&mut gpioa.crl),
+                ),
+                &mut afio.mapr,
+                embedded_hal::spi::MODE_2, // !
+                Hertz::MHz(5), // работает на 5 МГц
+                clocks,
+            ),
+            gpioa.pa3.into_push_pull_output(&mut gpioa.crl),
+            gpioa.pa1.into_push_pull_output(&mut gpioa.crl),
+        );
+
+        let mut disp: ssd1309::prelude::GraphicsMode<_> =
+            ssd1309::Builder::new().connect(di).into();
+        let syst = {
+            let mut reset = gpioa.pa2.into_push_pull_output(&mut gpioa.crl);
+            let mut delay_provider =
+                cortex_m::delay::Delay::new(ctx.core.SYST, clocks.hclk().to_Hz());
+
+            disp.reset(&mut reset, &mut delay_provider).ok();
+            delay_provider.free()
+        };
+        disp.init().unwrap();
+        //disp.set_pixel(10, 10, embedded_graphics::pixelcolor::BinaryColor::On as u8);
+        disp.flush().unwrap();
+
+        defmt::info!("Display init");
+
+        //---------------------------------------------------------------------
+
         i2c_scan::spawn_after(100u64.millis()).ok();
         defmt::info!("Spawn I2C scan task");
 
@@ -401,6 +452,10 @@ mod app {
 
         usb_pull_up.toggle(); // enable USB
         defmt::info!("USB enabled");
+
+        //---------------------------------------------------------------------
+
+        let mono = Systick::new(syst, clocks.sysclk().to_Hz());
 
         //---------------------------------------------------------------------
 
@@ -412,6 +467,8 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
+
+                display: disp,
                 //gcode_queue: heapless::Deque::new(),
                 //request_queue: heapless::Deque::new(),
             },
@@ -486,18 +543,23 @@ mod app {
         });
     }
 
-    #[task(shared = [i2c, i2c_scan_addr], local=[i2c_device, i2c_error_count], priority = 1)]
-    fn inquary_i2c(ctx: inquary_i2c::Context) {
-        let mut addr = ctx.shared.i2c_scan_addr;
+    #[task(shared = [i2c, i2c_scan_addr, display], local=[i2c_device, i2c_error_count], priority = 1)]
+    fn inquary_i2c(mut ctx: inquary_i2c::Context) {
+        let addr = ctx.shared.i2c_scan_addr.lock(|addr| *addr);
+
         let mut i2c = ctx.shared.i2c;
+        let mut display = ctx.shared.display;
+
         let device = ctx.local.i2c_device;
         let i2c_error_count = ctx.local.i2c_error_count;
 
-        (&mut i2c, &mut addr).lock(|i2c, addr| {
+        let mut storage = heapless::Vec::<u8, 64>::new();
+
+        i2c.lock(|i2c| {
             if let Some(dev) = device {
-                let mut storage = heapless::Vec::<u8, 64>::new();
+                // Known device on known address
                 storage.resize(dev.data_size(), 0).ok();
-                if let Err(e) = dev.read(*addr, &mut storage, i2c) {
+                if let Err(e) = dev.read(addr, &mut storage, i2c) {
                     defmt::error!("{} at {} error: {}", dev.name(), addr, e);
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
@@ -509,8 +571,9 @@ mod app {
                     inquary_i2c::spawn_after(250u64.millis()).ok(); // next read
                 }
             } else {
+                // Address ocupied, but device is still unknown
                 for dev in I2C_DEVICES {
-                    if let Err(e) = dev.probe(*addr, i2c) {
+                    if let Err(e) = dev.probe(addr, i2c) {
                         defmt::error!("{} error: {:?}", dev.name(), e);
                     } else {
                         defmt::info!("{} found!", dev.name());
@@ -522,6 +585,10 @@ mod app {
                     }
                 }
             }
+        });
+
+        display.lock(|display| {
+
         });
     }
 

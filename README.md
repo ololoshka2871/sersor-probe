@@ -86,3 +86,20 @@
 | Acknowledge        | `1 << 2` | Ошибка подтверждения шины I2C (нет ответа)             |
 | Overrun            | `1 << 3` | Ошибка переполнения буфера                             |
 | Timeout            | `1 << 4` | Операция не выполнена за отведенный промежуток времени |
+
+## Макет
+![Схема](./maket_board.pdf)
+
+| Назначение | Пин |
+| --- | --- |
+| `SDA` | `PB7` |
+| `SCL` | `PB6` |
+| `Sensor_VCC` | `Direct +5v` |
+| `Sensor_GND` | `P1-4` |
+| `DISPLAY_VCC` | `P4-1 (+3.3v)` |
+| `DISPLAY_GND` | `P4-5` |
+| `DISPLAY_CS` | `P4-2 (PA1)` |
+| `DISPLAY_DC` | `P4-3 (PA3)` |
+| `DISPLAY_RES` | `P4-4 (PA2)` |
+| `DISPLAY_SCK` | `P2-2 (SPI1_SCK)` |
+| `DISPLAY_SDA` | `P2-4 (SPI1_MOSI)` |

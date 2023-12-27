@@ -10,7 +10,6 @@ resolver = "2"
 num = { version = "0.4", default-features = false }
 libm = "0.2"
 vcell = "0.1.3"
-heapless = { version = "0.8", features = ["defmt-03"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 nb = "1"
 tbytes = "0.1.0-alpha2"
@@ -38,7 +37,6 @@ systick-monotonic = "1.0.1"
 display-interface = "0.4"
 display-interface-spi = "0.4"
 ssd1309 = "0.4"
-ssd1306 = "0.8"
 embedded-graphics = "0.8" 
 
 # defmt

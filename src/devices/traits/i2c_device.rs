@@ -1,4 +1,7 @@
+use alloc::boxed::Box;
 use embedded_hal::blocking::i2c::{Read, Write};
+
+use super::ValuesStorage;
 
 pub type I2CAddress = u8;
 
@@ -15,19 +18,10 @@ where
     fn data_size(&self) -> usize;
 
     /// Probe the device at the given address.
-    fn probe(&self, addr: I2CAddress, i2c: &mut I2C) -> Result<(), Self::Error>;
+    fn probe_i2c(&self, addr: I2CAddress, i2c: &mut I2C) -> Result<(), Self::Error>;
 
     /// Read the device at the given address. The data is stored in the provided storage.
-    fn read(
-        &self,
-        addr: I2CAddress,
-        dest: &mut [u8],
-        i2c: &mut I2C,
-    ) -> Result<(), Self::Error>;
+    fn read_i2c(&self, addr: I2CAddress, dest: &mut dyn ValuesStorage, i2c: &mut I2C) -> Result<(), Self::Error>;
 
-    /// Render values to display.
-    fn render(&self, data: &[u8]);
-
-    /// Print values to string.
-    fn print(&self, data: &[u8]) -> crate::config::HlString;
+    fn make_storage(&self) -> Box<dyn super::ValuesStorage>;
 }

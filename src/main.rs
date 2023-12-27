@@ -291,12 +291,17 @@ mod app {
         use usbd_hid::descriptor::SerializedDescriptor;
 
         static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
+        static mut HEAP_MEM: [core::mem::MaybeUninit<u8>; config::HEAP_SIZE] =
+            [core::mem::MaybeUninit::uninit(); config::HEAP_SIZE];
 
         defmt::info!("Init...");
 
         ctx.core.DCB.enable_trace();
         ctx.core.DWT.enable_cycle_counter();
         defmt::info!("DWT...");
+
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
+        defmt::info!("Heap...");
 
         let mut flash = ctx.device.FLASH.constrain();
 
@@ -420,7 +425,7 @@ mod app {
                 ),
                 &mut afio.mapr,
                 embedded_hal::spi::MODE_2, // !
-                Hertz::MHz(5), // работает на 5 МГц
+                Hertz::MHz(5),             // работает на 5 МГц
                 clocks,
             ),
             gpioa.pa3.into_push_pull_output(&mut gpioa.crl),
@@ -547,33 +552,30 @@ mod app {
     fn inquary_i2c(mut ctx: inquary_i2c::Context) {
         let addr = ctx.shared.i2c_scan_addr.lock(|addr| *addr);
 
-        let mut i2c = ctx.shared.i2c;
-        let mut display = ctx.shared.display;
-
         let device = ctx.local.i2c_device;
         let i2c_error_count = ctx.local.i2c_error_count;
 
-        let mut storage = heapless::Vec::<u8, 64>::new();
-
-        i2c.lock(|i2c| {
+        let storage = ctx.shared.i2c.lock(|i2c| {
             if let Some(dev) = device {
                 // Known device on known address
-                storage.resize(dev.data_size(), 0).ok();
-                if let Err(e) = dev.read(addr, &mut storage, i2c) {
+                let mut storage = dev.make_storage();
+                if let Err(e) = dev.read_i2c(addr, storage.as_mut(), i2c) {
                     defmt::error!("{} at {} error: {}", dev.name(), addr, e);
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
                         defmt::error!("{} at {} not responding", dev.name(), addr);
                         i2c_scan::spawn_after(50u64.millis()).ok();
                     }
+                    None
                 } else {
-                    defmt::info!("{} at {} result: {}", dev.name(), addr, dev.print(&storage));
                     inquary_i2c::spawn_after(250u64.millis()).ok(); // next read
+
+                    Some(storage)
                 }
             } else {
                 // Address ocupied, but device is still unknown
                 for dev in I2C_DEVICES {
-                    if let Err(e) = dev.probe(addr, i2c) {
+                    if let Err(e) = dev.probe_i2c(addr, i2c) {
                         defmt::error!("{} error: {:?}", dev.name(), e);
                     } else {
                         defmt::info!("{} found!", dev.name());
@@ -584,12 +586,15 @@ mod app {
                         inquary_i2c::spawn_after(500u64.millis()).ok();
                     }
                 }
+                None
             }
         });
 
-        display.lock(|display| {
-
-        });
+        if let (Some(dev), Some(storage)) = (device, storage) {
+            ctx.shared.display.lock(move |_display| {
+                defmt::info!("{}: {}", dev.name(), storage.print().as_str());
+            });
+        }
     }
 
     //-------------------------------------------------------------------------

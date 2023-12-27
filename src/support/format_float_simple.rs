@@ -1,13 +1,14 @@
 use core::{fmt::Write, str::FromStr};
 
+use alloc::string::String;
 use num::traits::float::FloatCore;
 
-pub fn format_float_simple(v: f32, percision: i32) -> crate::config::HlString {
+pub fn format_float_simple(v: f32, percision: i32) -> String {
     if v.is_nan() {
-        crate::config::HlString::from_str("NaN").unwrap()
+        String::from_str("NaN").unwrap()
     } else {
         let a = v.floor();
-        let mut res = crate::config::HlString::new();
+        let mut res = String::new();
         write!(
             &mut res,
             "{}.{}",

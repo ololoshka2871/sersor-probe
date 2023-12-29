@@ -5,6 +5,7 @@
 pub mod bridge;
 mod config;
 mod devices;
+mod display_state;
 mod hw;
 mod support;
 
@@ -264,6 +265,14 @@ mod app {
 
         i2c: TsensorI2c,
         i2c_scan_addr: u8,
+        display_state: display_state::DisplayState<1000>,
+    }
+
+    #[local]
+    struct Local {
+        i2c_device:
+            Option<&'static dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>>,
+        i2c_error_count: u8,
 
         display: ssd1309::mode::GraphicsMode<
             display_interface_spi::SPIInterface<
@@ -272,15 +281,6 @@ mod app {
                 PA1<Output>,
             >,
         >,
-        //gcode_queue: heapless::Deque<gcode::GCode, { config::GCODE_QUEUE_SIZE }>,
-        //request_queue: heapless::Deque<gcode::Request, { config::GCODE_QUEUE_SIZE }>,
-    }
-
-    #[local]
-    struct Local {
-        i2c_device:
-            Option<&'static dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>>,
-        i2c_error_count: u8,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -460,7 +460,7 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let mono = Systick::new(syst, clocks.sysclk().to_Hz());
+        let mut mono = Systick::new(syst, clocks.sysclk().to_Hz());
 
         //---------------------------------------------------------------------
 
@@ -472,14 +472,13 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
-
-                display: disp,
-                //gcode_queue: heapless::Deque::new(),
-                //request_queue: heapless::Deque::new(),
+                display_state: display_state::DisplayState::init(mono.now() + 3.secs()),
             },
             Local {
                 i2c_device: None,
                 i2c_error_count: 0,
+
+                display: disp,
             },
             init::Monotonics(mono),
         )
@@ -548,7 +547,7 @@ mod app {
         });
     }
 
-    #[task(shared = [i2c, i2c_scan_addr, display], local=[i2c_device, i2c_error_count], priority = 1)]
+    #[task(shared = [i2c, i2c_scan_addr, display_state], local=[i2c_device, i2c_error_count], priority = 1)]
     fn inquary_i2c(mut ctx: inquary_i2c::Context) {
         let addr = ctx.shared.i2c_scan_addr.lock(|addr| *addr);
 
@@ -590,22 +589,41 @@ mod app {
             }
         });
 
+        // read current
         if let (Some(dev), Some(storage)) = (device, storage) {
-            ctx.shared.display.lock(move |_display| {
-                defmt::info!("{}: {}", dev.name(), storage.print().as_str());
-            });
+            defmt::info!("{}: {}", dev.name(), storage.print().as_str());
+            ctx.shared
+                .display_state
+                .lock(|state| 
+                    // update display state
+                    state.display_output(storage)
+                ); 
+            update_display::spawn().ok(); // update display
         }
     }
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c, i2c], local = [])]
+    #[task(shared = [display_state], local=[display], priority = 1)]
+    fn update_display(mut ctx: update_display::Context) {
+        let display = ctx.local.display;
+        ctx.shared.display_state.lock(|state| {
+            display.clear();
+            state.render(display, monotonics::MonoTimer::now())?;    
+            display.flush()        
+        }).unwrap();
+    }
+
+    //-------------------------------------------------------------------------
+
+    #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state], local = [])]
     fn idle(ctx: idle::Context) -> ! {
         use usbd_serial::LineCoding;
 
         let mut serial1 = ctx.shared.serial1;
         let mut serial2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
+        let mut display_state = ctx.shared.display_state;
 
         let mut i2c = ctx.shared.i2c;
 
@@ -692,6 +710,11 @@ mod app {
                     }
                 }
             });
+
+            // display
+            if display_state.lock(|state| state.animate(monotonics::MonoTimer::now())) {
+                update_display::spawn().ok();
+            }
         }
     }
 }

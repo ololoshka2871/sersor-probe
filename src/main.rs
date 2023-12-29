@@ -472,7 +472,7 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
-                display_state: display_state::DisplayState::init(mono.now() + 3.secs()),
+                display_state: display_state::DisplayState::init(mono.now() + 100.millis()),
             },
             Local {
                 i2c_device: None,
@@ -520,15 +520,17 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [i2c, i2c_scan_addr], priority = 1)]
+    #[task(shared = [i2c, i2c_scan_addr, display_state], priority = 1)]
     fn i2c_scan(ctx: i2c_scan::Context) {
         let mut scan_addr = ctx.shared.i2c_scan_addr;
         let mut i2c = ctx.shared.i2c;
+        let mut display_state = ctx.shared.display_state;
 
-        (&mut i2c, &mut scan_addr).lock(|i2c, scan_addr| {
+        (&mut i2c, &mut scan_addr, &mut display_state).lock(|i2c, scan_addr, display_state| {
             let mut buf = [0u8; 4];
 
             defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
+            display_state.scan(display_state::ScanState::I2C(*scan_addr));
             match bridge::MyI2COperation::new_scan_op(&mut buf, *scan_addr).execute(i2c) {
                 Ok(_) => {
                     defmt::info!("...something detected!");
@@ -541,7 +543,7 @@ mod app {
                     if *scan_addr > config::I2C_ADDR_MIN_MAX {
                         *scan_addr = config::I2C_ADDR_MIN;
                     }
-                    i2c_scan::spawn_after(50u64.millis()).ok();
+                    i2c_scan::spawn_after(250u64.millis()).ok();
                 }
             }
         });

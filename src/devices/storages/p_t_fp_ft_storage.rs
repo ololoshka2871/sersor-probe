@@ -1,7 +1,10 @@
-use alloc::{string::String, format};
+use alloc::vec::Vec;
+use alloc::{format, string::String};
 use tbytes::TBytesReaderFor;
 
 use crate::devices::ValuesStorage;
+
+use crate::support::format_float_simple as f;
 
 #[derive(defmt_macros::Format, Copy, Clone)]
 pub struct PTFpFtstorage {
@@ -45,7 +48,6 @@ impl ValuesStorage for PTFpFtstorage {
     }
 
     fn print(&self) -> String {
-        use crate::support::format_float_simple as f;
         use core::fmt::Write;
 
         let mut s = String::new();
@@ -61,5 +63,14 @@ impl ValuesStorage for PTFpFtstorage {
         .ok();
         write!(s, "}}").ok();
         s
+    }
+
+    fn render(&self, field_width: u32) -> Vec<String> {
+        alloc::vec![
+            format!("P={:>w$}", f(self.p, 2), w = field_width as usize - 2),
+            format!("T={:>w$}", f(self.t, 2), w = field_width as usize - 2),
+            format!("Fp={:>w$}", f(self.fp, 2), w = field_width as usize - 3),
+            format!("Ft={:>w$}", f(self.ft, 2), w = field_width as usize - 3)
+        ]
     }
 }

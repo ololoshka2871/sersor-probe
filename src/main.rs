@@ -433,7 +433,7 @@ mod app {
         );
 
         let mut disp: ssd1309::prelude::GraphicsMode<_> =
-            ssd1309::Builder::new().connect(di).into();
+            ssd1309::Builder::new().with_rotation(ssd1309::displayrotation::DisplayRotation::Rotate90).connect(di).into();
         let syst = {
             let mut reset = gpioa.pa2.into_push_pull_output(&mut gpioa.crl);
             let mut delay_provider =
@@ -471,7 +471,7 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
-                display_state: display_state::DisplayState::init(mono.now() + 100.millis()),
+                display_state: display_state::DisplayState::init(mono.now() + 50.millis()), // 3500.millis()
             },
             Local {
                 i2c_device: None,
@@ -542,7 +542,7 @@ mod app {
                     if *scan_addr > config::I2C_ADDR_MIN_MAX {
                         *scan_addr = config::I2C_ADDR_MIN;
                     }
-                    i2c_scan::spawn_after(250u64.millis()).ok();
+                    i2c_scan::spawn_after(250u64.millis()).ok(); // 50.millis()
                 }
             }
             update_display::spawn().ok(); // update display

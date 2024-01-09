@@ -42,5 +42,8 @@
     - [v] Probe, определение типа датчика
     - [v] Read
     - [v] Render as debug output
-- [ ] Heap
+- [v] Heap
+    - via `embedded-alloc`
 - [ ] Дисплей
+    - [v] Подключение
+    - [ ] Перевернуть на 90 градусов

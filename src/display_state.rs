@@ -2,11 +2,11 @@ use core::{fmt::Display, ops::Add};
 
 use alloc::{boxed::Box, format, string::String};
 use embedded_graphics::{
-    geometry::{Dimensions, Point, Size},
+    geometry::{AnchorPoint, Dimensions, Point, Size},
     mono_font::{self, MonoTextStyle, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
-    primitives::{Circle, Primitive, PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
+    primitives::{Circle, Line, Primitive, PrimitiveStyle, Rectangle},
+    text::{self, renderer::CharacterStyle, Alignment, Baseline, Text, TextStyleBuilder},
     Drawable,
 };
 
@@ -19,19 +19,39 @@ use crate::support::format_float_simple;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum ScanState {
+    UART(u8),
+    RS485(u8),
     I2C(u8),
 }
 
 impl ScanState {
     pub fn bus_name(&self) -> &'static str {
-        match self {
-            ScanState::I2C(_) => "I2C",
+        Self::bus_name_from_usize(self.to_selected_current())
+    }
+
+    pub fn bus_name_from_usize(bus: usize) -> &'static str {
+        match bus {
+            0 => "232",
+            1 => "485",
+            2 => "I2C",
+            _ => panic!(),
         }
     }
 
     pub fn bus_address(&self) -> String {
+        let addr = match self {
+            ScanState::UART(addr) => *addr,
+            ScanState::RS485(addr) => *addr,
+            ScanState::I2C(addr) => *addr,
+        };
+        format!("0x{:02X}", addr)
+    }
+
+    pub fn to_selected_current(&self) -> usize {
         match self {
-            ScanState::I2C(addr) => format!("0x{:02X}", addr),
+            ScanState::UART(_) => 0,
+            ScanState::RS485(_) => 1,
+            ScanState::I2C(_) => 2,
         }
     }
 }
@@ -57,6 +77,8 @@ enum State<const FREQ_HZ: u32> {
 impl Display for ScanState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            ScanState::UART(addr) => write!(f, "Сканирование\nШины RS232\n0x{:02X}", addr),
+            ScanState::RS485(addr) => write!(f, "Сканирование\nШины RS485\n0x{:02X}", addr),
             ScanState::I2C(addr) => write!(f, "Сканирование\nШины I2C\n0x{:02X}", addr),
         }
     }
@@ -66,6 +88,7 @@ pub struct DisplayState<const FREQ_HZ: u32> {
     state: State<FREQ_HZ>,
     big_font: MonoTextStyle<'static, BinaryColor>,
     small_font: MonoTextStyle<'static, BinaryColor>,
+    inv_small_font: MonoTextStyle<'static, BinaryColor>,
     small_font_italic: MonoTextStyle<'static, BinaryColor>,
     prev_scan_state: Option<ScanState>,
 }
@@ -73,7 +96,7 @@ pub struct DisplayState<const FREQ_HZ: u32> {
 impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     pub fn init(wellcome_before: TimerInstantU64<FREQ_HZ>) -> Self {
         let big_font = MonoTextStyleBuilder::new()
-            .font(&mono_font::iso_8859_5::FONT_10X20)
+            .font(&mono_font::iso_8859_5::FONT_9X18_BOLD)
             .text_color(BinaryColor::On)
             .build();
 
@@ -81,6 +104,10 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             .font(&mono_font::iso_8859_5::FONT_6X13)
             .text_color(BinaryColor::On)
             .build();
+
+        let mut inv_small_font = small_font.clone();
+        inv_small_font.set_background_color(Some(BinaryColor::On));
+        inv_small_font.set_text_color(Some(BinaryColor::Off));
 
         let small_font_italic = MonoTextStyleBuilder::new()
             .font(&mono_font::iso_8859_5::FONT_6X13_ITALIC)
@@ -94,6 +121,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             },
             big_font,
             small_font,
+            inv_small_font,
             small_font_italic,
             prev_scan_state: None,
         }
@@ -159,23 +187,42 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             (d.0 as i32, d.1 as i32)
         };
 
-        Text::with_baseline("Пробник", Point::new(25, -3), self.big_font, Baseline::Top)
-            .draw(display)?;
-        Text::with_alignment(
-            "универсальный",
-            Point::new(
-                (display_w / 2).into(),
-                self.big_font.font.character_size.height as i32 + 6,
-            ),
+        Text::with_text_style(
+            "Пробник",
+            Point::new(display_w / 2, -3),
             self.big_font,
+            TextStyleBuilder::new()
+                .alignment(Alignment::Center)
+                .baseline(Baseline::Top)
+                .build(),
+        )
+        .draw(display)?;
+
+        let _y = self.big_font.font.character_size.height as i32 + 10;
+        Text::with_alignment(
+            "логический\nпереходник",
+            Point::new(display_w / 2, _y),
+            self.small_font,
             Alignment::Center,
         )
         .draw(display)?;
-        Text::with_baseline(
-            "СКТБ ЭлПА 2023",
-            Point::new(23, display_h),
+        Line::new(
+            Point::new(display_w / 10, _y + 3),
+            Point::new(display_w * 9 / 10, _y + 3),
+        )
+        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        .draw(display)?;
+        Text::with_text_style(
+            "СКТБ ЭлПА\n2024",
+            Point::new(
+                display_w / 2,
+                display_h - self.small_font_italic.font.character_size.height as i32,
+            ),
             self.small_font_italic,
-            Baseline::Bottom,
+            TextStyleBuilder::new()
+                .alignment(Alignment::Center)
+                .baseline(Baseline::Bottom)
+                .build(),
         )
         .draw(display)?;
 
@@ -187,7 +234,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         const ANIMATION_OFFSET: i32 = (DIAMETER_TABLE.len() - 3) as i32;
 
         for c in 0..CIRCLES_COUNT {
-            let circle_x = circles_x_start + c * curcles_step;
+            let circle_x = circles_x_start + (CIRCLES_COUNT - 1 - c) * curcles_step;
             let animation_step = animation_step as i32 - ANIMATION_OFFSET * c;
             let diameter = if animation_step < 0 || animation_step >= DIAMETER_TABLE.len() as i32 {
                 3
@@ -229,78 +276,82 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         };
 
         // draw frame
-        let start = Point::new(display_h / 10, 0);
-        let size = Size::new((display_w * 9 / 10) as u32, (display_h * 8 / 10) as u32);
-        Rectangle::new(start, size)
-            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+        let rect = Rectangle::with_center(
+            Point::new(display_w / 2, display_h / 3),
+            Size::new(display_w as u32 - 2, (display_h / 2) as u32),
+        );
+        rect.into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
             .draw(display)
             .unwrap();
 
-        let offset = Size::new(2, 2);
-        let inner_frame_start = start.add(offset);
-        let inner_frame_size = size.saturating_sub(offset * 2);
-        Rectangle::new(inner_frame_start, inner_frame_size)
+        let inner_frame = rect.resized(rect.size.add(Size::new(2, 2)), AnchorPoint::Center);
+        inner_frame
             .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
             .draw(display)
             .unwrap();
 
         // draw bus name
-        let header_pos = Text::with_text_style(
-            "Сканирую",
-            Point::new(display_w / 2, inner_frame_start.y),
-            self.small_font,
-            TextStyleBuilder::new()
-                .alignment(Alignment::Center)
-                .baseline(Baseline::Top)
-                .build(),
-        )
-        .draw(display)?;
-        let bus_name_pos = Text::with_text_style(
-            scan_state.bus_name(),
-            Point::new(
-                display_w / 2,
-                header_pos.y + self.small_font.font.character_size.height as i32 - 2,
-            ),
-            self.big_font,
-            TextStyleBuilder::new()
-                .alignment(Alignment::Center)
-                .baseline(Baseline::Top)
-                .build(),
-        )
-        .draw(display)?;
-
-        // draw address
-        Text::with_text_style(
-            scan_state.bus_address().as_str(),
-            Point::new(
-                display_w / 2,
-                bus_name_pos.y + self.big_font.font.character_size.height as i32 - 3,
-            ),
-            self.big_font,
-            TextStyleBuilder::new()
-                .alignment(Alignment::Center)
-                .baseline(Baseline::Top)
-                .build(),
-        )
-        .draw(display)?;
-
-        // draw current (mA)
         Text::with_text_style(
             format!(
-                "{} | {} | {}",
-                format_float_simple(0f32, 1),
-                format_float_simple(0f32, 1),
-                format_float_simple(0f32, 1)
+                "Скан\n{}\n{}",
+                scan_state.bus_name(),
+                scan_state.bus_address()
             )
             .as_str(),
-            Point::new(display_w / 2, display_h),
-            self.small_font,
+            Point::new(display_w / 2, inner_frame.top_left.y + 5),
+            self.big_font,
             TextStyleBuilder::new()
                 .alignment(Alignment::Center)
-                .baseline(Baseline::Bottom)
+                .baseline(Baseline::Top)
                 .build(),
         )
         .draw(display)?;
+
+        self.render_current_info(
+            display,
+            [15.3, 10.8, 3.2],
+            Some(scan_state.to_selected_current()),
+            Point::new(
+                0,
+                display_h - self.small_font.font.character_size.height as i32 * 3,
+            ),
+        )
+    }
+
+    fn render_current_info<DI>(
+        &self,
+        display: &mut GraphicsMode<DI>,
+        currents: [f32; 3],
+        selected_current: Option<usize>,
+        initial_pos: Point,
+    ) -> Result<(), display_interface::DisplayError>
+    where
+        DI: display_interface::WriteOnlyDataCommand,
+    {
+        for c in 0..currents.len() {
+            let string = format!(
+                "{}: {}",
+                ScanState::bus_name_from_usize(c),
+                format_float_simple(currents[c], 1)
+            );
+            let text = Text::with_text_style(
+                string.as_str(),
+                initial_pos.add(Size::new(
+                    0,
+                    self.small_font.font.character_size.height * c as u32,
+                )),
+                if Some(c) == selected_current {
+                    self.inv_small_font
+                } else {
+                    self.small_font
+                },
+                TextStyleBuilder::new()
+                    .alignment(Alignment::Left)
+                    .baseline(Baseline::Top)
+                    .build(),
+            );
+            text.draw(display)?;
+        }
 
         Ok(())
     }
@@ -315,7 +366,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     {
         defmt::trace!("render_output_display_screen");
 
-        let (display_w, _display_h) = {
+        let (display_w, display_h) = {
             let d = display.get_dimensions();
             (d.0 as i32, d.1 as i32)
         };
@@ -325,36 +376,84 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
             .draw(display)
             .unwrap();
-        // bus: 0xID @ 0xAddr
+
         if let Some(ss) = &self.prev_scan_state {
-            let ts = TextStyleBuilder::new()
+            let ts_center = TextStyleBuilder::new()
                 .alignment(Alignment::Center)
+                .baseline(Baseline::Top)
+                .build();
+            let ts_left = TextStyleBuilder::new()
+                .alignment(Alignment::Left)
                 .baseline(Baseline::Top)
                 .build();
 
             let mut pos = Text::with_text_style(
-                format!(
-                    "{}: {} @ {}",
-                    ss.bus_name(),
-                    value_storage.sender_id().as_str(),
-                    ss.bus_address()
-                )
-                .as_str(),
+                value_storage.sender_id().as_str(),
                 Point::new(display_w / 2, 1),
-                self.small_font,
-                ts,
+                self.big_font,
+                ts_center,
             )
             .draw(display)?;
 
-            // на экране 4 доступных строчки
-            for l in 0..4u32 {
-                pos = Text::with_text_style(
-                    format!("{l}").as_str(),
-                    Point::new(display_w / 2, pos.y + self.small_font.font.character_size.height as i32 - 1),
+            {
+                let txt = format!("{} {}", ss.bus_name(), ss.bus_address());
+                let text = Text::with_text_style(
+                    txt.as_str(),
+                    Point::new(
+                        display_w / 2,
+                        pos.y + self.big_font.font.character_size.height as i32,
+                    ),
                     self.small_font,
-                    ts,
+                    ts_center,
+                );
+                pos = text.draw(display)?;
+                Line::new(
+                    Point::new(0, pos.y - 1),
+                    Point::new(display_w - 1, pos.y - 1),
+                )
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+
+                let bot = text.bounding_box().bottom_right().unwrap_or_default();
+                Line::new(Point::new(0, bot.y), Point::new(display_w - 1, bot.y))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                    .draw(display)?;
+            };
+
+            pos.y += 3;
+            for v in value_storage
+                .render((display_w as u32 - 4) / self.small_font.font.character_size.width as u32)
+            {
+                pos = Text::with_text_style(
+                    v.as_str(),
+                    Point::new(
+                        2,
+                        pos.y + self.small_font.font.character_size.height as i32 - 2,
+                    ),
+                    self.small_font,
+                    ts_left,
                 )
                 .draw(display)?;
+            }
+
+            // Ток потребления
+            {
+                let txt = format!("I={:>6}mA", format_float_simple(10.2, 1));
+                let text = Text::with_text_style(
+                    txt.as_str(),
+                    Point::new(2, display_h - 1),
+                    self.small_font,
+                    TextStyleBuilder::new()
+                        .alignment(Alignment::Left)
+                        .baseline(Baseline::Bottom)
+                        .build(),
+                );
+                text.draw(display)?;
+
+                let y = text.bounding_box().top_left.y - 1;
+                Line::new(Point::new(0, y), Point::new(display_w - 1, y))
+                    .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                    .draw(display)?;
             }
         }
 

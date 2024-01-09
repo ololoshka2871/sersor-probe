@@ -443,7 +443,6 @@ mod app {
             delay_provider.free()
         };
         disp.init().unwrap();
-        //disp.set_pixel(10, 10, embedded_graphics::pixelcolor::BinaryColor::On as u8);
         disp.flush().unwrap();
 
         defmt::info!("Display init");
@@ -546,6 +545,7 @@ mod app {
                     i2c_scan::spawn_after(250u64.millis()).ok();
                 }
             }
+            update_display::spawn().ok(); // update display
         });
     }
 

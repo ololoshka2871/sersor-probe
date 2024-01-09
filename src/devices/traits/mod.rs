@@ -7,6 +7,6 @@ mod modbus_device;
 pub trait ValuesStorage: Send {
     fn size(&self) -> usize;
     fn copy_from(&mut self, src: &[u8]);
-    fn render(&self);
+    fn sender_id(&self) -> String;
     fn print(&self) -> String;
 }

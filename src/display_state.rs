@@ -2,11 +2,11 @@ use core::{fmt::Display, ops::Add};
 
 use alloc::{boxed::Box, format, string::String};
 use embedded_graphics::{
-    geometry::{Point, Size},
+    geometry::{Dimensions, Point, Size},
     mono_font::{self, MonoTextStyle, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     primitives::{Circle, Primitive, PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, LineHeight, Text, TextStyle, TextStyleBuilder},
+    text::{Alignment, Baseline, Text, TextStyleBuilder},
     Drawable,
 };
 
@@ -102,7 +102,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     pub fn render<DI>(
         &self,
         disp: &mut GraphicsMode<DI>,
-        time: TimerInstantU64<FREQ_HZ>,
+        _time: TimerInstantU64<FREQ_HZ>,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
@@ -204,7 +204,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
     fn render_current_monitoring_screen<DI>(
         &self,
-        display: &mut GraphicsMode<DI>,
+        _display: &mut GraphicsMode<DI>,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
@@ -284,7 +284,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         )
         .draw(display)?;
 
-        // draw currnt (mA)
+        // draw current (mA)
         Text::with_text_style(
             format!(
                 "{} | {} | {}",
@@ -314,12 +314,56 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         DI: display_interface::WriteOnlyDataCommand,
     {
         defmt::trace!("render_output_display_screen");
+
+        let (display_w, _display_h) = {
+            let d = display.get_dimensions();
+            (d.0 as i32, d.1 as i32)
+        };
+
+        display
+            .bounding_box()
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .draw(display)
+            .unwrap();
+        // bus: 0xID @ 0xAddr
+        if let Some(ss) = &self.prev_scan_state {
+            let ts = TextStyleBuilder::new()
+                .alignment(Alignment::Center)
+                .baseline(Baseline::Top)
+                .build();
+
+            let mut pos = Text::with_text_style(
+                format!(
+                    "{}: {} @ {}",
+                    ss.bus_name(),
+                    value_storage.sender_id().as_str(),
+                    ss.bus_address()
+                )
+                .as_str(),
+                Point::new(display_w / 2, 1),
+                self.small_font,
+                ts,
+            )
+            .draw(display)?;
+
+            // на экране 4 доступных строчки
+            for l in 0..4u32 {
+                pos = Text::with_text_style(
+                    format!("{l}").as_str(),
+                    Point::new(display_w / 2, pos.y + self.small_font.font.character_size.height as i32 - 1),
+                    self.small_font,
+                    ts,
+                )
+                .draw(display)?;
+            }
+        }
+
         Ok(())
     }
 
     fn render_disconnect_screen<DI>(
         &self,
-        display: &mut GraphicsMode<DI>,
+        _display: &mut GraphicsMode<DI>,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
@@ -350,17 +394,8 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                 }
             }
             State::DetectingScreen(s) => {
-                if let Some(pss) = &self.prev_scan_state {
-                    if pss != s {
-                        self.prev_scan_state = Some(*s);
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    self.prev_scan_state = Some(*s);
-                    true
-                }
+                self.prev_scan_state = Some(*s);
+                false
             }
             _ => false,
         }

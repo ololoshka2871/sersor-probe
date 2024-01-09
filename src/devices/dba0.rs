@@ -46,6 +46,6 @@ where
     }
 
     fn make_storage(&self) -> Box<dyn super::ValuesStorage> {
-        Box::new(PTFpFtstorage::default())
+        Box::new(PTFpFtstorage::new(<Self as I2CDevice<I2C>>::name(&self)))
     }
 }

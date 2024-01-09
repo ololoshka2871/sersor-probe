@@ -1,14 +1,27 @@
-use alloc::string::String;
+use alloc::{string::String, format};
 use tbytes::TBytesReaderFor;
 
 use crate::devices::ValuesStorage;
 
-#[derive(defmt_macros::Format, Copy, Clone, Default)]
+#[derive(defmt_macros::Format, Copy, Clone)]
 pub struct PTFpFtstorage {
+    pub sender: &'static str,
     pub p: f32,
     pub t: f32,
     pub fp: f32,
     pub ft: f32,
+}
+
+impl PTFpFtstorage {
+    pub fn new(sender: &'static str) -> Self {
+        Self {
+            sender,
+            p: 0.0,
+            t: 0.0,
+            fp: 0.0,
+            ft: 0.0,
+        }
+    }
 }
 
 impl ValuesStorage for PTFpFtstorage {
@@ -27,8 +40,8 @@ impl ValuesStorage for PTFpFtstorage {
         }
     }
 
-    fn render(&self) {
-        defmt::trace!("ValuesStorage::render()");
+    fn sender_id(&self) -> String {
+        format!("0x{}", self.sender)
     }
 
     fn print(&self) -> String {

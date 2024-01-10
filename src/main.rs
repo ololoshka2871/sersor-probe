@@ -622,7 +622,7 @@ mod app {
 
         // read current
         if let (Some(dev), Some(storage)) = (device, storage) {
-            defmt::info!("{}: {}", dev.name(), storage.print().as_str());
+            defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
             ctx.shared
                 .display_state
                 .lock(|state| 
@@ -663,7 +663,7 @@ mod app {
             let values = [
                 ((fi / 25670.3 + 1.1).sin() * 10f32).max(-0.5),
                 ((fi / 35040.0 + 5.3).sin() * 2f32).max(-0.2),
-                ((fi / 23010.1 + 2.1).sin() * 6f32).max(-0.1),
+                ((fi / 10010.1 + 2.1).sin() * 6f32).max(-0.1),
             ];
 
             defmt::error!("Current read error, simulate: {}", values);

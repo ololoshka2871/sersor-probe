@@ -15,7 +15,7 @@ target/
 
 # doc
 *.pdf
-!SensorPlobe.pdf
+!SensorProbe.pdf
 !maket_board.pdf
 
 # gen

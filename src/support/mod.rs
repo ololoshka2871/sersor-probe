@@ -8,3 +8,6 @@ pub use hid_descriptor::HidDescriptor;
 
 mod current_meter;
 pub use current_meter::CurrentMeter;
+
+mod rect_ext;
+pub use rect_ext::RectangleExt;

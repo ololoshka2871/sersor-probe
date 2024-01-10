@@ -10,13 +10,14 @@ use embedded_graphics::{
     pixelcolor::BinaryColor,
     primitives::{Circle, Line, Primitive, PrimitiveStyle, Rectangle},
     text::{renderer::CharacterStyle, Alignment, Baseline, Text, TextStyleBuilder},
+    transform::Transform,
     Drawable,
 };
 
 use ssd1309::mode::GraphicsMode;
-use systick_monotonic::fugit::TimerInstantU64;
+use systick_monotonic::{fugit::TimerInstantU64, ExtU64};
 
-use crate::devices::ValuesStorage;
+use crate::{devices::ValuesStorage, support::RectangleExt};
 
 use crate::support::format_float_simple;
 
@@ -129,7 +130,10 @@ enum State<const FREQ_HZ: u32> {
         value_storage: Box<dyn ValuesStorage>,
     },
     /// Устройство отключено, заглдушка на 2 секунды и переход к CurrentMonitoringScreen
-    DisconnectScreen,
+    DisconnectScreen {
+        end_at: TimerInstantU64<FREQ_HZ>,
+        current_animation_step: u32,
+    },
 }
 
 impl Display for ScanState {
@@ -197,27 +201,27 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     {
         match &self.state {
             State::WellcomeScreen {
-                end_at: _,
                 current_animation_step,
+                ..
             } => self.render_wellcome_screen(disp, *current_animation_step),
             State::CurrentMonitoringScreen => self.render_current_monitoring_screen(disp),
             State::DetectingScreen(s) => self.render_detecting_screen(disp, s),
             State::OutputDisplayScreen { value_storage: vs } => {
                 self.render_output_display_screen(disp, vs.as_ref())
             }
-            State::DisconnectScreen => self.render_disconnect_screen(disp),
+            State::DisconnectScreen {
+                current_animation_step,
+                ..
+            } => self.render_disconnect_screen(disp, *current_animation_step),
         }
     }
 
     pub fn display_output(&mut self, value_storage: Box<dyn ValuesStorage>) {
-        if let State::WellcomeScreen {
-            end_at: _,
-            current_animation_step: _,
-        } = self.state
-        {
-            /* Ignore */
-        } else {
-            self.state = State::OutputDisplayScreen { value_storage };
+        match self.state {
+            State::DetectingScreen(_) | State::OutputDisplayScreen { .. } => {
+                self.state = State::OutputDisplayScreen { value_storage };
+            }
+            _ => { /* Ignore */ }
         }
     }
 
@@ -225,7 +229,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         match &self.state {
             State::CurrentMonitoringScreen
             | State::DetectingScreen(_)
-            | State::DisconnectScreen => {
+            | State::DisconnectScreen { .. } => {
                 self.state = State::DetectingScreen(state);
             }
             _ => { /* Ignore */ }
@@ -348,7 +352,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             .draw(display)
             .unwrap();
 
-        let inner_frame = rect.resized(rect.size.add(Size::new(2, 2)), AnchorPoint::Center);
+        let inner_frame = rect.offset(-2);
         inner_frame
             .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
             .draw(display)
@@ -530,16 +534,142 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
     fn render_disconnect_screen<DI>(
         &self,
-        _display: &mut GraphicsMode<DI>,
+        display: &mut GraphicsMode<DI>,
+        animation_step: u32,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        defmt::trace!("render_disconnect_screen");
+        defmt::trace!("render_disconnect_screen: {}", animation_step);
+
+        let (display_w, display_h) = {
+            let d = display.get_dimensions();
+            (d.0 as i32, d.1 as i32)
+        };
+
+        // draw frame
+        let rect = Rectangle::with_center(
+            Point::new(display_w / 2, display_h / 3),
+            Size::new(display_w as u32 - 2, (display_h * 3 / 5) as u32),
+        );
+        rect.into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .draw(display)
+            .unwrap();
+
+        let inner_frame = rect.offset(-2);
+        inner_frame
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+            .draw(display)
+            .unwrap();
+
+        // render socket
+        let size = Size::new((rect.size.width / 3) as u32, (rect.size.width * 3 / 7) as u32);
+        let bounding_rect = Rectangle::with_center(
+            Point::new(
+                display_w / 2,
+                rect.bottom_right().unwrap_or_default().y - (size.height as i32 / 2) - 5,
+            ),
+            size,
+        );
+
+        {
+            let left_line = bounding_rect.left_line().translate(Point::new(-4, 0));
+            left_line
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+            let socket_rect = Rectangle::new(
+                left_line.start + Size::new(0, left_line.delta().y.abs() as u32 / 10),
+                Size::new(7, left_line.delta().y.abs() as u32 * 8 / 10),
+            );
+            socket_rect
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+
+            let conn_rect = socket_rect.translate(Point::new(13, 0)).resized_height(
+                left_line.delta().y.abs() as u32 * 6 / 10,
+                embedded_graphics::geometry::AnchorY::Center,
+            );
+            conn_rect
+                .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                .draw(display)?;
+            let center_y = conn_rect.center().y;
+            let con_x = conn_rect.top_left.x;
+            Line::new(
+                Point::new(con_x, center_y + conn_rect.size.height as i32 / 4),
+                Point::new(con_x - 5, center_y + conn_rect.size.height as i32 / 4),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 2))
+            .draw(display)?;
+            Line::new(
+                Point::new(con_x, center_y - conn_rect.size.height as i32 / 4),
+                Point::new(con_x - 5, center_y - conn_rect.size.height as i32 / 4),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 2))
+            .draw(display)?;
+            Line::new(
+                Point::new(con_x + conn_rect.size.width as i32, center_y),
+                Point::new(con_x + conn_rect.size.width as i32 + 7, center_y),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 4))
+            .draw(display)?;
+        }
+
+        // render animation
+        if animation_step % 2 == 0 {
+            // render cross
+
+            bounding_rect
+                .diaganal1()
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+            bounding_rect
+                .diaganal2()
+                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
+                .draw(display)?;
+        }
+
+        // current info
+        self.render_current_info(
+            display,
+            None,
+            Point::new(
+                0,
+                display_h - self.small_font.font.character_size.height as i32 * 3,
+            ),
+        )?;
+
+        // draw bus name
+        if let Some(scan_state) = self.prev_scan_state {
+            Text::with_text_style(
+                format!("Обрыв!\n{}", scan_state.bus_name(),).as_str(),
+                Point::new(display_w / 2, inner_frame.top_left.y + 3),
+                self.big_font,
+                TextStyleBuilder::new()
+                    .alignment(Alignment::Center)
+                    .baseline(Baseline::Top)
+                    .build(),
+            )
+            .draw(display)?;
+        }
         Ok(())
     }
 
     pub fn animate(&mut self, time: TimerInstantU64<FREQ_HZ>) -> bool {
+        let recal_animation = |end_at: TimerInstantU64<FREQ_HZ>,
+                               current_animation_step: u32,
+                               an_step_duration_ms: u64|
+         -> Option<u32> {
+            let an_s = end_at
+                .checked_duration_since(time)
+                .map(|d| (d.to_millis() / an_step_duration_ms) as u32)
+                .unwrap_or(0);
+            if an_s != current_animation_step {
+                Some(an_s)
+            } else {
+                None
+            }
+        };
+
         match &mut self.state {
             State::WellcomeScreen {
                 end_at,
@@ -549,20 +679,53 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                     self.state = State::CurrentMonitoringScreen;
                     true
                 } else {
-                    let an_s = end_at
-                        .checked_duration_since(time)
-                        .map(|d| (d.to_millis() / 100) as u32)
-                        .unwrap_or(0);
-                    let new_an_step = an_s != *current_animation_step;
-                    if new_an_step {
-                        *current_animation_step = an_s;
+                    if let Some(new_an_step) =
+                        recal_animation(*end_at, *current_animation_step, 100)
+                    {
+                        *current_animation_step = new_an_step;
+                        true
+                    } else {
+                        false
                     }
-                    new_an_step
                 }
             }
             State::DetectingScreen(s) => {
                 self.prev_scan_state = Some(*s);
                 false
+            }
+            State::OutputDisplayScreen { .. } => {
+                if let Some(ss) = self.prev_scan_state {
+                    if self.current_values[ss.bus_name()] < 0.1 {
+                        let end_at = time + 2u64.secs();
+                        self.state = State::DisconnectScreen {
+                            end_at,
+                            current_animation_step: recal_animation(end_at, 0, 100).unwrap_or(0),
+                        };
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            State::DisconnectScreen {
+                end_at,
+                current_animation_step,
+            } => {
+                if time >= *end_at {
+                    self.state = State::CurrentMonitoringScreen;
+                    true
+                } else {
+                    if let Some(new_an_step) =
+                        recal_animation(*end_at, *current_animation_step, 500)
+                    {
+                        *current_animation_step = new_an_step;
+                        true
+                    } else {
+                        false
+                    }
+                }
             }
             _ => false,
         }

@@ -420,10 +420,12 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                     .draw(display)?;
             };
 
+            let field_width =
+                (display_w as u32 - 4) / self.small_font.font.character_size.width as u32;
+
             pos.y += 3;
-            for v in value_storage
-                .render((display_w as u32 - 4) / self.small_font.font.character_size.width as u32)
-            {
+
+            for v in value_storage.render(field_width) {
                 pos = Text::with_text_style(
                     v.as_str(),
                     Point::new(
@@ -438,7 +440,11 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
             // Ток потребления
             {
-                let txt = format!("I={:>6}mA", format_float_simple(10.2, 1));
+                let txt = format!(
+                    "I={:>w$}mA",
+                    format_float_simple(10.2, 1),
+                    w = field_width as usize - 2
+                );
                 let text = Text::with_text_style(
                     txt.as_str(),
                     Point::new(2, display_h - 1),

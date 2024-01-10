@@ -69,8 +69,8 @@ impl ValuesStorage for PTFpFtstorage {
         alloc::vec![
             format!("P={:>w$}", f(self.p, 2), w = field_width as usize - 2),
             format!("T={:>w$}", f(self.t, 2), w = field_width as usize - 2),
-            format!("Fp={:>w$}", f(self.fp, 2), w = field_width as usize - 3),
-            format!("Ft={:>w$}", f(self.ft, 2), w = field_width as usize - 3)
+            format!("Fp={:>w$}", f(self.fp, 1), w = field_width as usize - 3),
+            format!("Ft={:>w$}", f(self.ft, 1), w = field_width as usize - 3)
         ]
     }
 }

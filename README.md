@@ -103,3 +103,5 @@
 | `DISPLAY_RES` | `P4-4 (PA2)` |
 | `DISPLAY_SCK` | `P2-2 (SPI1_SCK)` |
 | `DISPLAY_SDA` | `P2-4 (SPI1_MOSI)` |
+| `INA_219_SDA` | `PB11` не подключено |
+| `INA_219_SCL` | `PB10` не подключено |

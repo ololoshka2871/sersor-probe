@@ -17,13 +17,13 @@ use rtic::app;
 use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
-use stm32f1xx_hal::gpio::{Alternate, GpioExt, OpenDrain, Output, PA1, PA3, PA5, PA7, PB6, PB7};
+use stm32f1xx_hal::gpio::{Alternate, GpioExt, OpenDrain, Output, PA1, PA3, PA5, PA7, PB6, PB7, PB10, PB11};
 use stm32f1xx_hal::rcc::{HPre, PPre};
 use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 use stm32f1xx_hal::time::Hertz;
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
-use stm32f1xx_hal::pac::{Interrupt, I2C1, SPI1};
+use stm32f1xx_hal::pac::{Interrupt, I2C1, I2C2, SPI1};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
@@ -281,6 +281,8 @@ mod app {
                 PA1<Output>,
             >,
         >,
+
+        current_meter: support::CurrentMeter<I2C2,(PB10<Alternate<OpenDrain> > ,PB11<Alternate<OpenDrain> >), 3>,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -415,6 +417,32 @@ mod app {
 
         //---------------------------------------------------------------------
 
+        let ina219_i2c = hw::I2cWraper::i2c2(ctx.device.I2C2, (
+            gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
+            gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
+        ), clocks, hw::Mode::Fast {
+                frequency: Hertz::kHz(100),
+                duty_cycle: hw::DutyCycle::Ratio2to1,
+            });
+
+        let mut current_meter = support::CurrentMeter::new(
+            ina219_i2c, [0x40, 0x41, 0x42]
+        );
+
+        const CAL_VAL: f32 = 0.04096 / (config::LSB * config::R_SUNT_OM);
+        static_assertions::const_assert!(CAL_VAL < u16::MAX as f32);
+
+        if let Err(e) = current_meter.calibrate(CAL_VAL as u16) {
+            defmt::error!("INA219 calibrate error: {:?}", defmt::Debug2Format(&e));
+        } else {
+            defmt::info!("INA219 calibrated");
+        }
+
+        read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
+        defmt::info!("Spawn read current task");
+
+        //---------------------------------------------------------------------
+
         let di = display_interface_spi::SPIInterface::new(
             stm32f1xx_hal::spi::Spi::spi1(
                 ctx.device.SPI1,
@@ -478,6 +506,7 @@ mod app {
                 i2c_error_count: 0,
 
                 display: disp,
+                current_meter,
             },
             init::Monotonics(mono),
         )
@@ -614,6 +643,37 @@ mod app {
             state.render(display, monotonics::MonoTimer::now())?;    
             display.flush()        
         }).unwrap();
+    }
+
+    //-------------------------------------------------------------------------
+
+    #[task(shared = [display_state], local = [current_meter], priority = 1)]
+    fn read_current(ctx: read_current::Context) {
+        let mut display_state = ctx.shared.display_state;
+        let current_meter = ctx.local.current_meter;
+        
+        let current_values = if let Ok(current) = current_meter.current(config::LSB) {
+            defmt::info!("Current: {}", current);
+
+            display_state::CurrentValues::from(current)
+        } else {
+            use micromath::F32Ext;
+
+            let fi = monotonics::MonoTimer::now().ticks() as f32;
+            let values = [
+                ((fi / 25670.3 + 1.1).sin() * 10f32).max(-0.5),
+                ((fi / 35040.0 + 5.3).sin() * 2f32).max(-0.2),
+                ((fi / 23010.1 + 2.1).sin() * 6f32).max(-0.1),
+            ];
+
+            defmt::error!("Current read error, simulate: {}", values);
+            
+            display_state::CurrentValues::from(values)
+        };
+
+        display_state.lock(move |ds| ds.update_current(current_values));
+
+        read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
     }
 
     //-------------------------------------------------------------------------

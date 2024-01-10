@@ -14,6 +14,9 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 nb = "1"
 tbytes = "0.1.0-alpha2"
 embedded-alloc = "0.5.1"
+static_assertions = "1"
+micromath = "2"
+byteorder = { version = "1.4", default-features = false }
 
 embedded-hal = { version = "0.2.7", features = ["unproven"] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"]}

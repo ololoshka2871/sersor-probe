@@ -1,4 +1,7 @@
-use core::{fmt::Display, ops::Add};
+use core::{
+    fmt::Display,
+    ops::{Add, Index},
+};
 
 use alloc::{boxed::Box, format, string::String};
 use embedded_graphics::{
@@ -6,7 +9,7 @@ use embedded_graphics::{
     mono_font::{self, MonoTextStyle, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     primitives::{Circle, Line, Primitive, PrimitiveStyle, Rectangle},
-    text::{self, renderer::CharacterStyle, Alignment, Baseline, Text, TextStyleBuilder},
+    text::{renderer::CharacterStyle, Alignment, Baseline, Text, TextStyleBuilder},
     Drawable,
 };
 
@@ -16,6 +19,61 @@ use systick_monotonic::fugit::TimerInstantU64;
 use crate::devices::ValuesStorage;
 
 use crate::support::format_float_simple;
+
+#[derive(Clone, Copy, Default)]
+pub struct CurrentValues {
+    pub uart: f32,
+    pub rs485: f32,
+    pub i2c: f32,
+}
+
+impl CurrentValues {
+    pub fn update(&mut self, current_values: [f32; 3]) {
+        self.uart = current_values[0];
+        self.rs485 = current_values[1];
+        self.i2c = current_values[2];
+    }
+
+    const fn len(&self) -> usize {
+        3
+    }
+}
+
+impl From<[f32; 3]> for CurrentValues {
+    fn from(current_values: [f32; 3]) -> Self {
+        Self {
+            uart: current_values[0],
+            rs485: current_values[1],
+            i2c: current_values[2],
+        }
+    }
+}
+
+impl Index<usize> for CurrentValues {
+    type Output = f32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        match index {
+            0 => &self.uart,
+            1 => &self.rs485,
+            2 => &self.i2c,
+            _ => panic!(),
+        }
+    }
+}
+
+impl Index<&'static str> for CurrentValues {
+    type Output = f32;
+
+    fn index(&self, index: &'static str) -> &Self::Output {
+        match index {
+            "232" => &self.uart,
+            "485" => &self.rs485,
+            "I2C" => &self.i2c,
+            _ => panic!(),
+        }
+    }
+}
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum ScanState {
@@ -91,6 +149,7 @@ pub struct DisplayState<const FREQ_HZ: u32> {
     inv_small_font: MonoTextStyle<'static, BinaryColor>,
     small_font_italic: MonoTextStyle<'static, BinaryColor>,
     prev_scan_state: Option<ScanState>,
+    current_values: CurrentValues,
 }
 
 impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
@@ -124,6 +183,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             inv_small_font,
             small_font_italic,
             prev_scan_state: None,
+            current_values: CurrentValues::default(),
         }
     }
 
@@ -170,6 +230,10 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             }
             _ => { /* Ignore */ }
         }
+    }
+
+    pub fn update_current(&mut self, current_values: CurrentValues) {
+        self.current_values = current_values;
     }
 
     fn render_wellcome_screen<DI>(
@@ -309,7 +373,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
         self.render_current_info(
             display,
-            [15.3, 10.8, 3.2],
             Some(scan_state.to_selected_current()),
             Point::new(
                 0,
@@ -321,18 +384,17 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     fn render_current_info<DI>(
         &self,
         display: &mut GraphicsMode<DI>,
-        currents: [f32; 3],
         selected_current: Option<usize>,
         initial_pos: Point,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        for c in 0..currents.len() {
+        for c in 0..self.current_values.len() {
             let string = format!(
                 "{}: {}",
                 ScanState::bus_name_from_usize(c),
-                format_float_simple(currents[c], 1)
+                format_float_simple(self.current_values[c], 1)
             );
             let text = Text::with_text_style(
                 string.as_str(),
@@ -442,7 +504,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             {
                 let txt = format!(
                     "I={:>w$}mA",
-                    format_float_simple(10.2, 1),
+                    format_float_simple(self.current_values[ss.bus_name()], 1),
                     w = field_width as usize - 2
                 );
                 let text = Text::with_text_style(

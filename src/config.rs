@@ -26,4 +26,18 @@ pub const CDC_ACM_MAX_PACKET_SIZE: u16 = 64;
 
 //-----------------------------------------------------------------------------
 
+pub const CURRENT_READ_INTERVAL_MS: u64 = 1000;
+
+pub const R_SUNT_OM: f32 = 0.1;
+
+// [Calibration Example 1](https://cdn-shop.adafruit.com/datasheets/ina219.pdf?p=17)
+// Espected current in mA
+// CURRENT_EXPECTED_A = 0.1;
+// Minimum_LSB = Max_Expected_I/32767 = 3.05-6
+// Maximum_LSB = Max_Expected_I/4069 = 24.41e-6
+// LSB -> 10e-6
+pub const LSB: f32 = 10e-6;
+
+//-----------------------------------------------------------------------------
+
 pub const HEAP_SIZE: usize = 1024;

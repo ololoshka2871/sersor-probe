@@ -27,6 +27,7 @@ pub const CDC_ACM_MAX_PACKET_SIZE: u16 = 64;
 //-----------------------------------------------------------------------------
 
 pub const CURRENT_READ_INTERVAL_MS: u64 = 1000;
+pub const SCREENSAVER_TIMEOUT_MS: u64 = 10_000;
 
 pub const R_SUNT_OM: f32 = 0.1;
 

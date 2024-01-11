@@ -122,7 +122,11 @@ enum State<const FREQ_HZ: u32> {
         current_animation_step: u32,
     },
     /// Ожидание подключения устройств к портам, мониторинг потребляемого тока
-    CurrentMonitoringScreen,
+    CurrentMonitoringScreen {
+        start: TimerInstantU64<FREQ_HZ>,
+        star_base_pos: Point,
+        current_animation_step: u32,
+    },
     /// Обнаружено подключение, сканирование шины
     DetectingScreen(ScanState),
     /// Отображение показаний найденного устройства
@@ -194,7 +198,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     pub fn render<DI>(
         &self,
         disp: &mut GraphicsMode<DI>,
-        _time: TimerInstantU64<FREQ_HZ>,
+        time: TimerInstantU64<FREQ_HZ>,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
@@ -204,7 +208,17 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                 current_animation_step,
                 ..
             } => self.render_wellcome_screen(disp, *current_animation_step),
-            State::CurrentMonitoringScreen => self.render_current_monitoring_screen(disp),
+            State::CurrentMonitoringScreen {
+                start,
+                star_base_pos,
+                current_animation_step,
+            } => self.render_current_monitoring_screen(
+                disp,
+                *start,
+                star_base_pos,
+                time,
+                *current_animation_step,
+            ),
             State::DetectingScreen(s) => self.render_detecting_screen(disp, s),
             State::OutputDisplayScreen { value_storage: vs } => {
                 self.render_output_display_screen(disp, vs.as_ref())
@@ -227,7 +241,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
     pub fn scan(&mut self, state: ScanState) {
         match &self.state {
-            State::CurrentMonitoringScreen
+            State::CurrentMonitoringScreen { .. }
             | State::DetectingScreen(_)
             | State::DisconnectScreen { .. } => {
                 self.state = State::DetectingScreen(state);
@@ -319,13 +333,158 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
     fn render_current_monitoring_screen<DI>(
         &self,
-        _display: &mut GraphicsMode<DI>,
+        display: &mut GraphicsMode<DI>,
+        start: TimerInstantU64<FREQ_HZ>,
+        star_base_pos: &Point,
+        time: TimerInstantU64<FREQ_HZ>,
+        current_animation_step: u32,
     ) -> Result<(), display_interface::DisplayError>
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        defmt::trace!("render_current_monitoring_screen");
-        Ok(())
+        let (display_w, display_h) = {
+            let d = display.get_dimensions();
+            (d.0 as i32, d.1 as i32)
+        };
+
+        if time > start + crate::config::SCREENSAVER_TIMEOUT_MS.millis() {
+            defmt::trace!("render_screensaver");
+            fn draw_cross<DI: display_interface::WriteOnlyDataCommand>(
+                display: &mut GraphicsMode<DI>,
+                mut center: Point,
+                size: Size,
+                fill_color: BinaryColor,
+                dimensions: (i32, i32),
+            ) -> Result<(), display_interface::DisplayError> {
+                center.x %= dimensions.0;
+                center.y %= dimensions.1;
+
+                Line::new(
+                    Point::new(center.x - size.width as i32 / 2, center.y),
+                    Point::new(center.x + size.width as i32 / 2, center.y),
+                )
+                .into_styled(PrimitiveStyle::with_stroke(fill_color, 1))
+                .draw(display)?;
+
+                Line::new(
+                    Point::new(center.x, center.y - size.height as i32 / 2),
+                    Point::new(center.x, center.y + size.height as i32 / 2),
+                )
+                .into_styled(PrimitiveStyle::with_stroke(fill_color, 1))
+                .draw(display)
+            }
+
+            let second_star_base = Point::new(star_base_pos.y, star_base_pos.x);
+            match current_animation_step {
+                0 => {
+                    Rectangle::with_center(
+                        Point::new(star_base_pos.x % display_w, star_base_pos.y % display_h),
+                        Size::new(1, 1),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+
+                    draw_cross(
+                        display,
+                        second_star_base,
+                        Size::new(10, 10),
+                        BinaryColor::On,
+                        (display_w, display_h),
+                    )?;
+                    draw_cross(
+                        display,
+                        second_star_base,
+                        Size::new(4, 4),
+                        BinaryColor::Off,
+                        (display_w, display_h),
+                    )?;
+                }
+                1 => {
+                    draw_cross(
+                        display,
+                        *star_base_pos,
+                        Size::new(4, 4),
+                        BinaryColor::On,
+                        (display_w, display_h),
+                    )?;
+
+                    draw_cross(
+                        display,
+                        second_star_base,
+                        Size::new(8, 8),
+                        BinaryColor::On,
+                        (display_w, display_h),
+                    )?;
+                }
+                2 => {
+                    draw_cross(
+                        display,
+                        *star_base_pos,
+                        Size::new(8, 8),
+                        BinaryColor::On,
+                        (display_w, display_h),
+                    )?;
+
+                    draw_cross(
+                        display,
+                        second_star_base,
+                        Size::new(4, 4),
+                        BinaryColor::On,
+                        (display_w, display_h),
+                    )?;
+                }
+                3 => {
+                    draw_cross(
+                        display,
+                        *star_base_pos,
+                        Size::new(10, 10),
+                        BinaryColor::On,
+                        (display_w, display_h),
+                    )?;
+                    draw_cross(
+                        display,
+                        *star_base_pos,
+                        Size::new(4, 4),
+                        BinaryColor::Off,
+                        (display_w, display_h),
+                    )?;
+
+                    Rectangle::with_center(
+                        Point::new(
+                            second_star_base.x % display_w,
+                            second_star_base.y % display_h,
+                        ),
+                        Size::new(1, 1),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display)?;
+                }
+                _ => {}
+            }
+
+            Ok(())
+        } else {
+            defmt::trace!("render_current_monitoring_screen");
+            Text::with_text_style(
+                "Жду\nдатчик",
+                Point::new(display_w / 2, 5),
+                self.big_font,
+                TextStyleBuilder::new()
+                    .alignment(Alignment::Center)
+                    .baseline(Baseline::Top)
+                    .build(),
+            )
+            .draw(display)?;
+
+            self.render_current_info(
+                display,
+                None,
+                Point::new(
+                    0,
+                    display_h - self.small_font.font.character_size.height as i32 * 3,
+                ),
+            )
+        }
     }
 
     fn render_detecting_screen<DI>(
@@ -563,7 +722,10 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             .unwrap();
 
         // render socket
-        let size = Size::new((rect.size.width / 3) as u32, (rect.size.width * 3 / 7) as u32);
+        let size = Size::new(
+            (rect.size.width / 3) as u32,
+            (rect.size.width * 3 / 7) as u32,
+        );
         let bounding_rect = Rectangle::with_center(
             Point::new(
                 display_w / 2,
@@ -655,10 +817,10 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     }
 
     pub fn animate(&mut self, time: TimerInstantU64<FREQ_HZ>) -> bool {
-        let recal_animation = |end_at: TimerInstantU64<FREQ_HZ>,
-                               current_animation_step: u32,
-                               an_step_duration_ms: u64|
-         -> Option<u32> {
+        let recal_animation = move |end_at: TimerInstantU64<FREQ_HZ>,
+                                    current_animation_step: u32,
+                                    an_step_duration_ms: u64|
+              -> Option<u32> {
             let an_s = end_at
                 .checked_duration_since(time)
                 .map(|d| (d.to_millis() / an_step_duration_ms) as u32)
@@ -670,14 +832,56 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             }
         };
 
+        let recalc_i_mon_animation = move |start: TimerInstantU64<FREQ_HZ>,
+                                           prev_animation_step: u32,
+                                           prev_star_pos: Option<Point>|
+              -> (State<FREQ_HZ>, bool) {
+            let prev_star_pos = prev_star_pos.unwrap_or(Point::new(32, 32));
+            let animation_step = (((time - start).to_millis() % 1_000) / 250) as u32;
+            if prev_animation_step != animation_step {
+                if animation_step == 0 {
+                    let t = time.ticks();
+                    let x = t as u32 / t.count_zeros();
+                    let y = t as u32 / t.count_ones();
+                    (
+                        State::CurrentMonitoringScreen {
+                            start,
+                            star_base_pos: Point::new(x as i32, y as i32),
+                            current_animation_step: animation_step,
+                        },
+                        true,
+                    )
+                } else {
+                    (
+                        State::CurrentMonitoringScreen {
+                            start,
+                            star_base_pos: prev_star_pos,
+                            current_animation_step: animation_step,
+                        },
+                        true,
+                    )
+                }
+            } else {
+                (
+                    State::CurrentMonitoringScreen {
+                        start,
+                        star_base_pos: prev_star_pos,
+                        current_animation_step: prev_animation_step,
+                    },
+                    false,
+                )
+            }
+        };
+
         match &mut self.state {
             State::WellcomeScreen {
                 end_at,
                 current_animation_step,
             } => {
                 if time >= *end_at {
-                    self.state = State::CurrentMonitoringScreen;
-                    true
+                    let (s, r) = recalc_i_mon_animation(time, 0, None);
+                    self.state = s;
+                    r
                 } else {
                     if let Some(new_an_step) =
                         recal_animation(*end_at, *current_animation_step, 100)
@@ -714,8 +918,9 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                 current_animation_step,
             } => {
                 if time >= *end_at {
-                    self.state = State::CurrentMonitoringScreen;
-                    true
+                    let (s, r) = recalc_i_mon_animation(time, 0, None);
+                    self.state = s;
+                    r
                 } else {
                     if let Some(new_an_step) =
                         recal_animation(*end_at, *current_animation_step, 500)
@@ -727,7 +932,16 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                     }
                 }
             }
-            _ => false,
+            State::CurrentMonitoringScreen {
+                start,
+                current_animation_step,
+                star_base_pos,
+            } => {
+                let (s, r) =
+                    recalc_i_mon_animation(*start, *current_animation_step, Some(*star_base_pos));
+                self.state = s;
+                r
+            }
         }
     }
 }

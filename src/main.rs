@@ -17,7 +17,9 @@ use rtic::app;
 use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
-use stm32f1xx_hal::gpio::{Alternate, GpioExt, OpenDrain, Output, PA1, PA3, PA5, PA7, PB6, PB7, PB10, PB11};
+use stm32f1xx_hal::gpio::{
+    Alternate, GpioExt, OpenDrain, Output, PA1, PA3, PA5, PA7, PB10, PB11, PB6, PB7,
+};
 use stm32f1xx_hal::rcc::{HPre, PPre};
 use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 use stm32f1xx_hal::time::Hertz;
@@ -282,7 +284,11 @@ mod app {
             >,
         >,
 
-        current_meter: support::CurrentMeter<I2C2,(PB10<Alternate<OpenDrain> > ,PB11<Alternate<OpenDrain> >), 3>,
+        current_meter: support::CurrentMeter<
+            I2C2,
+            (PB10<Alternate<OpenDrain>>, PB11<Alternate<OpenDrain>>),
+            3,
+        >,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -417,17 +423,20 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let ina219_i2c = hw::I2cWraper::i2c2(ctx.device.I2C2, (
-            gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
-            gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
-        ), clocks, hw::Mode::Fast {
+        let ina219_i2c = hw::I2cWraper::i2c2(
+            ctx.device.I2C2,
+            (
+                gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
+                gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
+            ),
+            clocks,
+            hw::Mode::Fast {
                 frequency: Hertz::kHz(100),
                 duty_cycle: hw::DutyCycle::Ratio2to1,
-            });
-
-        let mut current_meter = support::CurrentMeter::new(
-            ina219_i2c, [0x40, 0x41, 0x42]
+            },
         );
+
+        let mut current_meter = support::CurrentMeter::new(ina219_i2c, [0x40, 0x41, 0x42]);
 
         const CAL_VAL: f32 = 0.04096 / (config::LSB * config::R_SUNT_OM);
         static_assertions::const_assert!(CAL_VAL < u16::MAX as f32);
@@ -437,9 +446,6 @@ mod app {
         } else {
             defmt::info!("INA219 calibrated");
         }
-
-        read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
-        defmt::info!("Spawn read current task");
 
         //---------------------------------------------------------------------
 
@@ -460,8 +466,10 @@ mod app {
             gpioa.pa1.into_push_pull_output(&mut gpioa.crl),
         );
 
-        let mut disp: ssd1309::prelude::GraphicsMode<_> =
-            ssd1309::Builder::new().with_rotation(ssd1309::displayrotation::DisplayRotation::Rotate90).connect(di).into();
+        let mut disp: ssd1309::prelude::GraphicsMode<_> = ssd1309::Builder::new()
+            .with_rotation(ssd1309::displayrotation::DisplayRotation::Rotate90)
+            .connect(di)
+            .into();
         let syst = {
             let mut reset = gpioa.pa2.into_push_pull_output(&mut gpioa.crl);
             let mut delay_provider =
@@ -477,17 +485,17 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        i2c_scan::spawn_after(100u64.millis()).ok();
-        defmt::info!("Spawn I2C scan task");
-
-        //---------------------------------------------------------------------
-
         usb_pull_up.toggle(); // enable USB
         defmt::info!("USB enabled");
 
         //---------------------------------------------------------------------
 
         let mut mono = Systick::new(syst, clocks.sysclk().to_Hz());
+
+        //---------------------------------------------------------------------
+
+        read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
+        defmt::info!("Spawn read current task");
 
         //---------------------------------------------------------------------
 
@@ -499,7 +507,7 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
-                display_state: display_state::DisplayState::init(mono.now() + 50.millis()), // 3500.millis()
+                display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
             },
             Local {
                 i2c_device: None,
@@ -548,89 +556,84 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [i2c, i2c_scan_addr, display_state], priority = 1)]
-    fn i2c_scan(ctx: i2c_scan::Context) {
-        let mut scan_addr = ctx.shared.i2c_scan_addr;
+    #[task(shared = [i2c, i2c_scan_addr, display_state], local=[i2c_device, i2c_error_count], priority = 1)]
+    fn i2c_pricess(ctx: i2c_pricess::Context) {
+        let mut i2c_scan_addr = ctx.shared.i2c_scan_addr;
         let mut i2c = ctx.shared.i2c;
         let mut display_state = ctx.shared.display_state;
 
-        (&mut i2c, &mut scan_addr, &mut display_state).lock(|i2c, scan_addr, display_state| {
-            let mut buf = [0u8; 4];
-
-            defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
-            display_state.scan(display_state::ScanState::I2C(*scan_addr));
-            match bridge::MyI2COperation::new_scan_op(&mut buf, *scan_addr).execute(i2c) {
-                Ok(_) => {
-                    defmt::info!("...something detected!");
-                    inquary_i2c::spawn_after(50u64.millis()).ok();
-                }
-                Err(_) => {
-                    defmt::trace!("...not found");
-                    *scan_addr += 1;
-
-                    if *scan_addr > config::I2C_ADDR_MIN_MAX {
-                        *scan_addr = config::I2C_ADDR_MIN;
-                    }
-                    i2c_scan::spawn_after(250u64.millis()).ok(); // 50.millis()
-                }
-            }
-            update_display::spawn().ok(); // update display
-        });
-    }
-
-    #[task(shared = [i2c, i2c_scan_addr, display_state], local=[i2c_device, i2c_error_count], priority = 1)]
-    fn inquary_i2c(mut ctx: inquary_i2c::Context) {
-        let addr = ctx.shared.i2c_scan_addr.lock(|addr| *addr);
+        let mut scan_addr = i2c_scan_addr.lock(|addr| *addr);
 
         let device = ctx.local.i2c_device;
         let i2c_error_count = ctx.local.i2c_error_count;
 
-        let storage = ctx.shared.i2c.lock(|i2c| {
-            if let Some(dev) = device {
-                // Known device on known address
+        // reset
+        if scan_addr == 0 {
+            *device = None;
+        }
+
+        if let Some(dev) = device {
+            // Known device on known address
+            if let Some(storage) = i2c.lock(|i2c| {
                 let mut storage = dev.make_storage();
-                if let Err(e) = dev.read_i2c(addr, storage.as_mut(), i2c) {
-                    defmt::error!("{} at {} error: {}", dev.name(), addr, e);
+                if let Err(e) = dev.read_i2c(scan_addr, storage.as_mut(), i2c) {
+                    defmt::error!("{} at {} error: {}", dev.name(), scan_addr, e);
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
-                        defmt::error!("{} at {} not responding", dev.name(), addr);
-                        i2c_scan::spawn_after(50u64.millis()).ok();
+                        defmt::error!("{} at {} not responding", dev.name(), scan_addr);
+                        i2c_scan_addr.lock(|addr| *addr = 0); // reset
                     }
                     None
                 } else {
-                    inquary_i2c::spawn_after(250u64.millis()).ok(); // next read
-
                     Some(storage)
                 }
-            } else {
-                // Address ocupied, but device is still unknown
-                for dev in I2C_DEVICES {
-                    if let Err(e) = dev.probe_i2c(addr, i2c) {
-                        defmt::error!("{} error: {:?}", dev.name(), e);
-                    } else {
-                        defmt::info!("{} found!", dev.name());
-
-                        device.replace(*dev);
-                        *i2c_error_count = 0;
-
-                        inquary_i2c::spawn_after(500u64.millis()).ok();
-                    }
-                }
-                None
+            }) {
+                defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
+                display_state.lock(|state| state.display_output(storage));
             }
-        });
+        } else {
+            scan_addr += 1;
+            if scan_addr > config::I2C_ADDR_MIN_MAX {
+                scan_addr = config::I2C_ADDR_MIN;
+            }
 
-        // read current
-        if let (Some(dev), Some(storage)) = (device, storage) {
-            defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
-            ctx.shared
-                .display_state
-                .lock(|state| 
-                    // update display state
-                    state.display_output(storage)
-                ); 
-            update_display::spawn().ok(); // update display
+            defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
+            display_state
+                .lock(|display_state| display_state.scan(display_state::ScanState::I2C(scan_addr)));
+
+            i2c.lock(|i2c| {
+                let mut buf = [0u8; 4];
+
+                match bridge::MyI2COperation::new_scan_op(&mut buf, scan_addr).execute(i2c) {
+                    Ok(_) => {
+                        defmt::info!("...something detected!");
+                        for dev in I2C_DEVICES {
+                            if let Err(e) = dev.probe_i2c(scan_addr, i2c) {
+                                defmt::error!("{} error: {}", dev.name(), e);
+                            } else {
+                                defmt::info!("{} found!", dev.name());
+
+                                device.replace(*dev);
+                                *i2c_error_count = 0;
+                            }
+                        }
+
+                        if device.is_none() {
+                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr)
+                        }
+                    }
+                    Err(_) => defmt::trace!("...not found"),
+                }
+            });
+
+            if scan_addr > config::I2C_ADDR_MIN_MAX {
+                scan_addr = config::I2C_ADDR_MIN;
+            }
+
+            i2c_scan_addr.lock(|addr| *addr = scan_addr);
         }
+
+        update_display::spawn().ok(); // update display
     }
 
     //-------------------------------------------------------------------------
@@ -638,20 +641,24 @@ mod app {
     #[task(shared = [display_state], local=[display], priority = 1)]
     fn update_display(mut ctx: update_display::Context) {
         let display = ctx.local.display;
-        ctx.shared.display_state.lock(|state| {
-            display.clear();
-            state.render(display, monotonics::MonoTimer::now())?;    
-            display.flush()        
-        }).unwrap();
+        ctx.shared
+            .display_state
+            .lock(|state| {
+                display.clear();
+                state.render(display, monotonics::MonoTimer::now())?;
+                display.flush()
+            })
+            .unwrap();
     }
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [display_state], local = [current_meter], priority = 1)]
+    #[task(shared = [display_state, i2c_scan_addr], local = [current_meter], priority = 1)]
     fn read_current(ctx: read_current::Context) {
         let mut display_state = ctx.shared.display_state;
         let current_meter = ctx.local.current_meter;
-        
+        let mut i2c_scan_addr = ctx.shared.i2c_scan_addr;
+
         let current_values = if let Ok(current) = current_meter.current(config::LSB) {
             defmt::info!("Current: {}", current);
 
@@ -667,11 +674,22 @@ mod app {
             ];
 
             defmt::error!("Current read error, simulate: {}", values);
-            
+
             display_state::CurrentValues::from(values)
         };
 
-        display_state.lock(move |ds| ds.update_current(current_values));
+        let pricess_state = display_state.lock(move |ds| ds.update_current(current_values));
+
+        if let Some(state) = pricess_state {
+            match state {
+                display_state::ScanState::UART(_) => {}
+                display_state::ScanState::RS485(_) => {}
+                display_state::ScanState::I2C(a) => {
+                    i2c_scan_addr.lock(|i2c_scan_addr| *i2c_scan_addr = a);
+                    i2c_pricess::spawn().ok();
+                }
+            }
+        }
 
         read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
     }

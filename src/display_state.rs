@@ -5,7 +5,7 @@ use core::{
 
 use alloc::{boxed::Box, format, string::String};
 use embedded_graphics::{
-    geometry::{AnchorPoint, Dimensions, Point, Size},
+    geometry::{Dimensions, Point, Size},
     mono_font::{self, MonoTextStyle, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     primitives::{Circle, Line, Primitive, PrimitiveStyle, Rectangle},
@@ -111,6 +111,20 @@ impl ScanState {
             ScanState::UART(_) => 0,
             ScanState::RS485(_) => 1,
             ScanState::I2C(_) => 2,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        match self {
+            ScanState::UART(a) => *a = 0,
+            ScanState::RS485(a) => *a = 0,
+            ScanState::I2C(a) => *a = 0,
+        }
+    }
+
+    pub fn is_reset(&self) -> bool {
+        match self {
+            ScanState::UART(a) | ScanState::RS485(a) | ScanState::I2C(a) => *a == 0,
         }
     }
 }
@@ -250,8 +264,39 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         }
     }
 
-    pub fn update_current(&mut self, current_values: CurrentValues) {
+    pub fn update_current(&mut self, current_values: CurrentValues) -> Option<ScanState> {
         self.current_values = current_values;
+
+        match &self.state {
+            // идет поиск, пусть идет дальше
+            State::DetectingScreen(ss) => Some(*ss),
+            // одет съем показаний, если ток больше crate::config::CURRENT_THRESHOLD_MA, то путь идет дальше
+            State::OutputDisplayScreen { .. } => {
+                if let Some(ss) = &self.prev_scan_state {
+                    if self.current_values[ss.bus_name()] < crate::config::CURRENT_THRESHOLD_MA {
+                        None
+                    } else {
+                        Some(*ss)
+                    }
+                } else {
+                    None
+                }
+            }
+            // идет мониторинг, если ток больше crate::config::CURRENT_THRESHOLD_MA, то начинаем сканирование это шины
+            State::CurrentMonitoringScreen { .. } => {
+                if current_values[0] > crate::config::CURRENT_THRESHOLD_MA {
+                    Some(ScanState::UART(0))
+                } else if current_values[1] > crate::config::CURRENT_THRESHOLD_MA {
+                    Some(ScanState::RS485(0))
+                } else if current_values[2] > crate::config::CURRENT_THRESHOLD_MA {
+                    Some(ScanState::I2C(0))
+                } else {
+                    None
+                }
+            }
+            // остальные состояния не требуют обновления
+            State::WellcomeScreen { .. } | State::DisconnectScreen { .. } => None,
+        }
     }
 
     fn render_wellcome_screen<DI>(
@@ -899,7 +944,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             }
             State::OutputDisplayScreen { .. } => {
                 if let Some(ss) = self.prev_scan_state {
-                    if self.current_values[ss.bus_name()] < 0.1 {
+                    if self.current_values[ss.bus_name()] < crate::config::CURRENT_THRESHOLD_MA {
                         let end_at = time + 2u64.secs();
                         self.state = State::DisconnectScreen {
                             end_at,
@@ -939,8 +984,14 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             } => {
                 let (s, r) =
                     recalc_i_mon_animation(*start, *current_animation_step, Some(*star_base_pos));
-                self.state = s;
-                r
+
+                if self.current_values["I2C"] > crate::config::CURRENT_THRESHOLD_MA {
+                    self.state = State::DetectingScreen(ScanState::I2C(0));
+                    true
+                } else {
+                    self.state = s;
+                    r
+                }
             }
         }
     }

@@ -6,6 +6,9 @@ pub use i2c_error::{HwError, I2CBridgeError};
 mod i2c_command;
 pub use i2c_command::MyI2COperation;
 
+mod modbus_buffer;
+pub use modbus_buffer::{ModbusBuffer, ModbusBufferState};
+
 pub trait Builder<'a>: Sized + Sync {
     /// Create a new scan operation
     fn new_scan_op(data_buff: &'a mut [u8; 4], scan_addr: u8) -> Self;

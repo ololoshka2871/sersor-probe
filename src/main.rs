@@ -9,6 +9,7 @@ mod display_state;
 mod hw;
 mod support;
 
+use bridge::ModbusBuffer;
 use defmt_rtt as _; // global logger
 use panic_probe as _;
 
@@ -29,7 +30,7 @@ use stm32f1xx_hal::pac::{Interrupt, I2C1, I2C2, SPI1};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
-use usbd_serial::CdcAcmClass;
+use usbd_serial::{CdcAcmClass, LineCoding};
 
 use support::clocking::{ClockConfigProvider, MyConfig};
 
@@ -252,6 +253,58 @@ static HEAP: Heap = Heap::empty();
 
 //-----------------------------------------------------------------------------
 
+fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
+    if prev.data_rate != new.data_rate()
+        || prev.parity_type != new.parity_type()
+        || prev.stop_bits != new.stop_bits()
+        || prev.data_bits != new.data_bits()
+    {
+        *prev = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
+        defmt::trace!("New LineCoding: {}", prev);
+        true
+    } else {
+        false
+    }
+}
+
+fn process_modbus_request(buf: &mut ModbusBuffer, bus_name: &'static str) {
+    if let Ok((tx_body, slave)) = buf.try_commit_request() {
+        defmt::trace!("Request {} -> 0x{:X}: {}", bus_name, slave, tx_body);
+        buf.reset(); // fixme
+    }
+}
+
+macro_rules! process_modbus {
+    (name=$bus_name: expr, vcom=$serial: expr, buf=$modbus_buffer: expr, prev_line_coding=$prev_line_coding: expr) => {{
+        let got_pocket = $serial.lock(|serial| {
+            if update_line_coding_if_changed($prev_line_coding, serial.line_coding()) {
+                // TODO: set serial1 line coding
+            }
+            $modbus_buffer.lock(|mb_buf| {
+                match mb_buf.can_feed() {
+                    Ok(0) => mb_buf.reset(),
+                    Err(nb::Error::WouldBlock) => return false, // busy
+                    _ => {}
+                }
+
+                match serial.read_packet(mb_buf.feed_me_to()) {
+                    Ok(count) if count > 0 => {
+                        mb_buf.feed(count);
+                        true
+                    }
+                    _ => false,
+                }
+            })
+        });
+
+        if got_pocket {
+            $modbus_buffer.lock(|mb_buf| process_modbus_request(mb_buf, $bus_name));
+        }
+    }};
+}
+
+//-----------------------------------------------------------------------------
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FSMC, ADC3, FLASH])]
 mod app {
     use systick_monotonic::*;
@@ -268,6 +321,9 @@ mod app {
         i2c: TsensorI2c,
         i2c_scan_addr: u8,
         display_state: display_state::DisplayState<1000>,
+
+        modbus1_buffer: bridge::ModbusBuffer,
+        modbus2_buffer: bridge::ModbusBuffer,
     }
 
     #[local]
@@ -508,6 +564,8 @@ mod app {
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
+                modbus1_buffer: bridge::ModbusBuffer::default(),
+                modbus2_buffer: bridge::ModbusBuffer::default(),
             },
             Local {
                 i2c_device: None,
@@ -696,10 +754,8 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state], local = [])]
+    #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state, modbus1_buffer, modbus2_buffer], local = [])]
     fn idle(ctx: idle::Context) -> ! {
-        use usbd_serial::LineCoding;
-
         let mut serial1 = ctx.shared.serial1;
         let mut serial2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
@@ -707,21 +763,8 @@ mod app {
 
         let mut i2c = ctx.shared.i2c;
 
-        fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
-            if prev.data_rate != new.data_rate()
-                || prev.parity_type != new.parity_type()
-                || prev.stop_bits != new.stop_bits()
-                || prev.data_bits != new.data_bits()
-            {
-                *prev = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
-                defmt::trace!("New LineCoding: {}", prev);
-                true
-            } else {
-                false
-            }
-        }
-
-        let mut buf = [0u8; config::CDC_ACM_MAX_PACKET_SIZE as usize];
+        let mut modbus1_buffer = ctx.shared.modbus1_buffer;
+        let mut modbus2_buffer = ctx.shared.modbus2_buffer;
 
         let mut prev_line_codings = [
             serial1.lock(|serial1| unsafe {
@@ -740,37 +783,21 @@ mod app {
                 cortex_m::asm::wfi();
             });
 
-            // read from serial1
-            serial1.lock(|serial1| {
-                if update_line_coding_if_changed(&mut prev_line_codings[0], serial1.line_coding()) {
-                }
-                match serial1.read_packet(&mut buf) {
-                    Ok(count) if count > 0 => {
-                        if let Ok(result) = core::str::from_utf8(&buf[..count]) {
-                            defmt::debug!("serial1: \"{}\" ({} bytes)", result, count);
-                        } else {
-                            defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
-                        }
-                    }
-                    _ => {}
-                }
-            });
+            // read from serial1 -> UART
+            process_modbus!(
+                name = "UART",
+                vcom = serial1,
+                buf = modbus1_buffer,
+                prev_line_coding = &mut prev_line_codings[0]
+            );
 
-            // read from serial2
-            serial2.lock(|serial2| {
-                if update_line_coding_if_changed(&mut prev_line_codings[1], serial2.line_coding()) {
-                }
-                match serial2.read_packet(&mut buf) {
-                    Ok(count) if count > 0 => {
-                        if let Ok(result) = core::str::from_utf8(&buf[..count]) {
-                            defmt::debug!("serial1: \"{}\" ({} bytes)", result, count);
-                        } else {
-                            defmt::debug!("serial1: {:?} ({} bytes)", &buf[..count], count);
-                        }
-                    }
-                    _ => {}
-                }
-            });
+            // read from serial2 -> RS485
+            process_modbus!(
+                name = "RS485",
+                vcom = serial2,
+                buf = modbus2_buffer,
+                prev_line_coding = &mut prev_line_codings[1]
+            );
 
             // HID-I2C
             (&mut hid_i2c, &mut i2c).lock(|hid_i2c, i2c| {

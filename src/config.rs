@@ -42,4 +42,4 @@ pub const LSB: f32 = 10e-6;
 
 //-----------------------------------------------------------------------------
 
-pub const HEAP_SIZE: usize = 1024;
+pub const HEAP_SIZE: usize = 2048;

@@ -307,8 +307,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        defmt::trace!("render_wellcome_screen(_, {})", animation_step);
-
         let (display_w, display_h) = {
             let d = display.get_dimensions();
             (d.0 as i32, d.1 as i32)
@@ -393,7 +391,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         };
 
         if time > start + crate::config::SCREENSAVER_TIMEOUT_MS.millis() {
-            defmt::trace!("render_screensaver");
             fn draw_cross<DI: display_interface::WriteOnlyDataCommand>(
                 display: &mut GraphicsMode<DI>,
                 mut center: Point,
@@ -509,7 +506,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
 
             Ok(())
         } else {
-            defmt::trace!("render_current_monitoring_screen");
             Text::with_text_style(
                 "Жду\nдатчик",
                 Point::new(display_w / 2, 5),
@@ -540,8 +536,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        defmt::trace!("render_detecting_screen");
-
         let (display_w, display_h) = {
             let d = display.get_dimensions();
             (d.0 as i32, d.1 as i32)
@@ -634,8 +628,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        defmt::trace!("render_output_display_screen");
-
         let (display_w, display_h) = {
             let d = display.get_dimensions();
             (d.0 as i32, d.1 as i32)
@@ -744,8 +736,6 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
-        defmt::trace!("render_disconnect_screen: {}", animation_step);
-
         let (display_w, display_h) = {
             let d = display.get_dimensions();
             (d.0 as i32, d.1 as i32)

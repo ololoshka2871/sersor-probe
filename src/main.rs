@@ -58,8 +58,8 @@ static HEAP: Heap = Heap::empty();
 
 //-----------------------------------------------------------------------------
 
-static UART1_BUS_BIND: &str = "UART";
-static UART2_BUS_BIND: &str = "RS485";
+const UART1_BUS_BIND: &str = "UART";
+const UART2_BUS_BIND: &str = "RS485";
 
 //-----------------------------------------------------------------------------
 
@@ -370,8 +370,11 @@ mod app {
             uart = uart,
             buffer = modbus_buffer,
             re_de = re_de,
-            tx2rx_timeout_task =
-                modbus_tx2rx_timeout::spawn_after(config::MODBUS_RESP_TIMEOUT_MS.millis(), 0).ok()
+            tx2rx_timeout_task = modbus_tx2rx_timeout::spawn_after(
+                config::MODBUS_RESP_TIMEOUT_MS.millis(),
+                UART1_BUS_BIND
+            )
+            .ok()
         );
     }
 
@@ -386,8 +389,11 @@ mod app {
             uart = uart,
             buffer = modbus_buffer,
             re_de = re_de,
-            tx2rx_timeout_task =
-                modbus_tx2rx_timeout::spawn_after(config::MODBUS_RESP_TIMEOUT_MS.millis(), 1).ok()
+            tx2rx_timeout_task = modbus_tx2rx_timeout::spawn_after(
+                config::MODBUS_RESP_TIMEOUT_MS.millis(),
+                UART2_BUS_BIND
+            )
+            .ok()
         );
     }
 
@@ -468,7 +474,6 @@ mod app {
                 scan_addr = config::I2C_ADDR_MIN;
             }
 
-            defmt::info!("Scanning I2C addr 0x{:X}...", scan_addr);
             display_state
                 .lock(|display_state| display_state.scan(display_state::ScanState::I2C(scan_addr)));
 
@@ -477,7 +482,7 @@ mod app {
 
                 match bridge::MyI2COperation::new_scan_op(&mut buf, scan_addr).execute(i2c) {
                     Ok(_) => {
-                        defmt::info!("...something detected!");
+                        defmt::info!("Scanning I2C addr 0x{:X}, something detected!", scan_addr);
                         for dev in I2C_DEVICES {
                             if let Err(e) = dev.probe_i2c(scan_addr, i2c) {
                                 defmt::error!("{} error: {}", dev.name(), e);
@@ -493,7 +498,7 @@ mod app {
                             defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr)
                         }
                     }
-                    Err(_) => defmt::trace!("...not found"),
+                    Err(_) => defmt::trace!("Scanning I2C addr 0x{:X}, no ansver", scan_addr),
                 }
             });
 
@@ -553,8 +558,8 @@ mod app {
 
         if let Some(state) = pricess_state {
             match state {
-                display_state::ScanState::UART(_) => {}
-                display_state::ScanState::RS485(_) => {}
+                display_state::ScanState::UART(_) => { /* todo */ }
+                display_state::ScanState::RS485(_) => { /* todo */ }
                 display_state::ScanState::I2C(a) => {
                     i2c_scan_addr.lock(|i2c_scan_addr| *i2c_scan_addr = a);
                     i2c_process::spawn().ok();
@@ -567,14 +572,14 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [modbus1_buffer, modbus2_buffer], priority = 2)]
-    fn modbus_tx2rx_timeout(mut ctx: modbus_tx2rx_timeout::Context, bus_num: u32) {
-        match bus_num {
-            0 => ctx.shared.modbus1_buffer.lock(ModbusBuffer::tx_timeout),
-            1 => ctx.shared.modbus2_buffer.lock(ModbusBuffer::tx_timeout),
+    #[task(shared = [modbus1_buffer, modbus2_buffer], capacity = 2, priority = 2)]
+    fn modbus_tx2rx_timeout(mut ctx: modbus_tx2rx_timeout::Context, bus_name: &'static str) {
+        match bus_name {
+            UART1_BUS_BIND => ctx.shared.modbus1_buffer.lock(ModbusBuffer::tx_timeout),
+            UART2_BUS_BIND => ctx.shared.modbus2_buffer.lock(ModbusBuffer::tx_timeout),
             _ => panic!(),
         }
-        defmt::error!("Modbus bus {} tx->rx timeout", bus_num);
+        defmt::error!("{}: tx -> rx timeout", bus_name);
     }
 
     //-------------------------------------------------------------------------

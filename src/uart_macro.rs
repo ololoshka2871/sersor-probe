@@ -2,14 +2,14 @@ use usbd_serial::LineCoding;
 
 use crate::{bridge::ModbusBuffer, support::MyLineCoding};
 
-pub fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
-    if prev.data_rate != new.data_rate()
-        || prev.parity_type != new.parity_type()
-        || prev.stop_bits != new.stop_bits()
-        || prev.data_bits != new.data_bits()
+pub fn update_line_coding_if_changed(lc: &mut MyLineCoding, new: &LineCoding, bus_name: &'static str) -> bool {
+    if lc.data_rate != new.data_rate()
+        || lc.parity_type != new.parity_type()
+        || lc.stop_bits != new.stop_bits()
+        || lc.data_bits != new.data_bits()
     {
-        *prev = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
-        defmt::trace!("New LineCoding: {}", prev);
+        *lc = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
+        defmt::info!("{}: New {}", bus_name, lc);
         true
     } else {
         false
@@ -18,7 +18,7 @@ pub fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) 
 
 pub fn try_commit_request(buf: &mut ModbusBuffer, bus_name: &'static str) -> bool {
     if let Ok((tx_body, slave)) = buf.try_commit_request() {
-        defmt::trace!("Request {} -> 0x{:X}: {}", bus_name, slave, tx_body);
+        defmt::debug!("Request {} -> 0x{:X}: {}", bus_name, slave, tx_body);
         true
     } else {
         false
@@ -31,7 +31,7 @@ macro_rules! process_modbus {
         // reconfigure uart if line coding changed
         if !$v_serial.lock(|serial| {
             let line_coding_changed =
-                update_line_coding_if_changed($prev_line_coding, serial.line_coding());
+                update_line_coding_if_changed($prev_line_coding, serial.line_coding(), $bus_name);
             if line_coding_changed {
                 $uart.lock(|uart| {
                     if let Err(e) = uart.reconfigure(*$prev_line_coding, $clocks) {

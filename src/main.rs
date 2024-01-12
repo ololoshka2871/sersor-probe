@@ -20,8 +20,8 @@ use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Alternate, GpioExt, OpenDrain, Output, PA1, PA10, PA3, PA5, PA7, PA8, PA9, PB10, PB11, PB5,
-    PB6, PB7,
+    Alternate, GpioExt, Input, OpenDrain, Output, PA1, PA10, PA3, PA5, PA7, PA8, PA9, PB10, PB11,
+    PB5, PB6, PB7,
 };
 use stm32f1xx_hal::serial::Serial;
 use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
@@ -65,7 +65,7 @@ static UART2_BUS_BIND: &str = "RS485";
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FLASH, CAN_RX1, CAN_SCE])]
 mod app {
-    use stm32f1xx_hal::gpio::{PinState, PushPull};
+    use stm32f1xx_hal::gpio::{PinState, PullUp, PushPull};
     use systick_monotonic::*;
 
     use super::*;
@@ -81,9 +81,9 @@ mod app {
         i2c_scan_addr: u8,
         display_state: display_state::DisplayState<1000>,
 
-        uart1: Serial<USART1, (PA9<Alternate>, PA10)>,
+        uart1: Serial<USART1, (PA9<Alternate>, PA10<Input<PullUp>>)>,
         re_de1: PA8<Output<PushPull>>,
-        uart2: Serial<USART3, (PB10<Alternate>, PB11)>,
+        uart2: Serial<USART3, (PB10<Alternate>, PB11<Input<PullUp>>)>,
         re_de2: PB5<Output<PushPull>>,
 
         modbus1_buffer: bridge::ModbusBuffer,
@@ -202,7 +202,7 @@ mod app {
             ctx.device.USART1,
             (
                 gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh),
-                gpioa.pa10,
+                gpioa.pa10.into_pull_up_input(&mut gpioa.crh),
             ),
             &mut afio.mapr,
             stm32f1xx_hal::serial::Config::default().baudrate(9_600u32.bps()),
@@ -217,7 +217,7 @@ mod app {
             ctx.device.USART3,
             (
                 gpiob.pb10.into_alternate_push_pull(&mut gpiob.crh),
-                gpiob.pb11,
+                gpiob.pb11.into_pull_up_input(&mut gpiob.crh),
             ),
             &mut afio.mapr,
             stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),

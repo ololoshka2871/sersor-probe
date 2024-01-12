@@ -81,14 +81,19 @@ macro_rules! process_modbus {
 macro_rules! uart_interrupt {
     (busname=$name: expr, uart=$uart:expr, buffer=$modbus_buffer: expr, re_de=$re_de: expr, tx2rx_timeout_task = $tx2rx_timeout_task: expr) => {
         (&mut $uart, &mut $modbus_buffer).lock(|uart, buf| {
-            if uart.is_tx_empty() {
+            if uart.is_rx_not_empty() {
+                let r: Result<u8, _> = uart.read();
+                if let Ok(b) = r {
+                    defmt::trace!("{}: 0x{:X}", $name, b);
+                }
+            } else if uart.is_tx_empty() {
                 if let Some(b) = buf.next_tx() {
                     uart.write(b).ok();
                 } else {
                     uart.unlisten(stm32f1xx_hal::serial::Event::Txe);
 
-                    uart.rx.read().ok(); // flush rx
-                    while let Err(_) = uart.tx.flush() { /* wait tx last byte */ }
+                    uart.tx.bflush().ok(); // flush tx
+                    while let Ok(_) = uart.rx.read() {} // flush rx
 
                     $re_de.lock(stm32f1xx_hal::gpio::Pin::set_low);
                     uart.listen(stm32f1xx_hal::serial::Event::Rxne);
@@ -96,11 +101,6 @@ macro_rules! uart_interrupt {
                     $tx2rx_timeout_task;
 
                     defmt::trace!("{}: Tx done", $name);
-                }
-            } else if uart.is_rx_not_empty() {
-                let r: Result<u8, _> = uart.read();
-                if let Ok(b) = r {
-                    defmt::trace!("{}: 0x{:X}", $name, b);
                 }
             } else {
                 defmt::panic!("{}: unknown interrupt!", $name);

@@ -8,6 +8,7 @@ mod devices;
 mod display_state;
 mod hw;
 mod support;
+mod uart_macro;
 
 use bridge::ModbusBuffer;
 use defmt_rtt as _; // global logger
@@ -19,20 +20,27 @@ use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Alternate, GpioExt, OpenDrain, Output, PA1, PA3, PA5, PA7, PB10, PB11, PB6, PB7,
+    Alternate, GpioExt, OpenDrain, Output, PA1, PA10, PA3, PA5, PA7, PA8, PA9, PB10, PB11, PB5,
+    PB6, PB7,
 };
 use stm32f1xx_hal::rcc::{HPre, PPre};
+use stm32f1xx_hal::serial::Serial;
 use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
-use stm32f1xx_hal::time::Hertz;
+use stm32f1xx_hal::time::{Hertz, U32Ext};
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
-use stm32f1xx_hal::pac::{Interrupt, I2C1, I2C2, SPI1};
+use stm32f1xx_hal::pac::{Interrupt, I2C1, I2C2, SPI1, USART1, USART3};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
-use usbd_serial::{CdcAcmClass, LineCoding};
+use usbd_serial::CdcAcmClass;
 
-use support::clocking::{ClockConfigProvider, MyConfig};
+use embedded_hal::serial::{Read, Write};
+
+use support::{
+    clocking::{ClockConfigProvider, MyConfig},
+    MyLineCoding,
+};
 
 use crate::bridge::{Builder, Execute};
 
@@ -202,41 +210,6 @@ impl ClockConfigProvider for HighPerformanceClockConfigProvider {
 
 //-----------------------------------------------------------------------------
 
-#[derive(Copy, Clone)]
-pub struct MyLineCoding {
-    pub stop_bits: usbd_serial::StopBits,
-    pub data_bits: u8,
-    pub parity_type: usbd_serial::ParityType,
-    pub data_rate: u32,
-}
-
-impl defmt::Format for MyLineCoding {
-    fn format(&self, fmt: defmt::Formatter) {
-        use usbd_serial::{ParityType, StopBits};
-
-        defmt::write!(
-            fmt,
-            "LineCoding {{ stop_bits: {}, data_bits: {}, parity_type: {}, data_rate: {} }}",
-            match self.stop_bits {
-                StopBits::One => "1",
-                StopBits::OnePointFive => "1.5",
-                StopBits::Two => "2",
-            },
-            self.data_bits,
-            match self.parity_type {
-                ParityType::None => "None",
-                ParityType::Odd => "Odd",
-                ParityType::Event => "Even",
-                ParityType::Mark => "Mark",
-                ParityType::Space => "Space",
-            },
-            self.data_rate
-        );
-    }
-}
-
-//-----------------------------------------------------------------------------
-
 type TsensorI2c = hw::I2cWraper<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>;
 
 pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
@@ -253,60 +226,14 @@ static HEAP: Heap = Heap::empty();
 
 //-----------------------------------------------------------------------------
 
-fn update_line_coding_if_changed(prev: &mut MyLineCoding, new: &LineCoding) -> bool {
-    if prev.data_rate != new.data_rate()
-        || prev.parity_type != new.parity_type()
-        || prev.stop_bits != new.stop_bits()
-        || prev.data_bits != new.data_bits()
-    {
-        *prev = unsafe { core::mem::transmute_copy::<_, MyLineCoding>(new) };
-        defmt::trace!("New LineCoding: {}", prev);
-        true
-    } else {
-        false
-    }
-}
-
-fn process_modbus_request(buf: &mut ModbusBuffer, bus_name: &'static str) {
-    if let Ok((tx_body, slave)) = buf.try_commit_request() {
-        defmt::trace!("Request {} -> 0x{:X}: {}", bus_name, slave, tx_body);
-        buf.reset(); // fixme
-    }
-}
-
-macro_rules! process_modbus {
-    (name=$bus_name: expr, vcom=$serial: expr, buf=$modbus_buffer: expr, prev_line_coding=$prev_line_coding: expr) => {{
-        let got_pocket = $serial.lock(|serial| {
-            if update_line_coding_if_changed($prev_line_coding, serial.line_coding()) {
-                // TODO: set serial1 line coding
-            }
-            $modbus_buffer.lock(|mb_buf| {
-                match mb_buf.can_feed() {
-                    Ok(0) => mb_buf.reset(),
-                    Err(nb::Error::WouldBlock) => return false, // busy
-                    _ => {}
-                }
-
-                match serial.read_packet(mb_buf.feed_me_to()) {
-                    Ok(count) if count > 0 => {
-                        mb_buf.feed(count);
-                        true
-                    }
-                    _ => false,
-                }
-            })
-        });
-
-        if got_pocket {
-            $modbus_buffer.lock(|mb_buf| process_modbus_request(mb_buf, $bus_name));
-        }
-    }};
-}
+static UART1_BUS_BIND: &str = "UART";
+static UART2_BUS_BIND: &str = "RS485";
 
 //-----------------------------------------------------------------------------
 
-#[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FSMC, ADC3, FLASH])]
+#[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FLASH, CAN_RX1, CAN_SCE])]
 mod app {
+    use stm32f1xx_hal::gpio::{PinState, PushPull};
     use systick_monotonic::*;
 
     use super::*;
@@ -321,6 +248,11 @@ mod app {
         i2c: TsensorI2c,
         i2c_scan_addr: u8,
         display_state: display_state::DisplayState<1000>,
+
+        uart1: Serial<USART1, (PA9<Alternate>, PA10)>,
+        re_de1: PA8<Output<PushPull>>,
+        uart2: Serial<USART3, (PB10<Alternate>, PB11)>,
+        re_de2: PB5<Output<PushPull>>,
 
         modbus1_buffer: bridge::ModbusBuffer,
         modbus2_buffer: bridge::ModbusBuffer,
@@ -345,6 +277,7 @@ mod app {
             (PB10<Alternate<OpenDrain>>, PB11<Alternate<OpenDrain>>),
             3,
         >,
+        clocks: stm32f1xx_hal::rcc::Clocks,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -429,34 +362,36 @@ mod app {
         defmt::info!("USB composite device");
 
         //---------------------------------------------------------------------
-
-        /*
         // UART1
-        let _uart1 = stm32f1xx_hal::serial::Serial::new(
+        let uart1 = stm32f1xx_hal::serial::Serial::new(
             ctx.device.USART1,
             (
-                gpiob.pb6.into_alternate_push_pull(&mut gpiob.crl),
-                gpiob.pb7,
+                gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh),
+                gpioa.pa10,
             ),
             &mut afio.mapr,
-            stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),
+            stm32f1xx_hal::serial::Config::default().baudrate(9_600u32.bps()),
             &clocks,
         );
+        let re_de1 = gpioa
+            .pa8
+            .into_push_pull_output_with_state(&mut gpioa.crh, PinState::Low);
 
-        //_uart1.reconfigure(config, clocks)
-
-        // UART2
-        let _uart2 = stm32f1xx_hal::serial::Serial::new(
-            ctx.device.USART2,
+        // UART3
+        let uart2 = stm32f1xx_hal::serial::Serial::new(
+            ctx.device.USART3,
             (
-                gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl),
-                gpioa.pa3,
+                gpiob.pb10.into_alternate_push_pull(&mut gpiob.crh),
+                gpiob.pb11,
             ),
             &mut afio.mapr,
             stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),
             &clocks,
         );
-        */
+
+        let re_de2 = gpiob
+            .pb5
+            .into_push_pull_output_with_state(&mut gpiob.crl, PinState::Low);
 
         defmt::info!("Serial ports");
 
@@ -479,6 +414,7 @@ mod app {
 
         //---------------------------------------------------------------------
 
+        /*
         let ina219_i2c = hw::I2cWraper::i2c2(
             ctx.device.I2C2,
             (
@@ -493,6 +429,8 @@ mod app {
         );
 
         let mut current_meter = support::CurrentMeter::new(ina219_i2c, [0x40, 0x41, 0x42]);
+        */
+        let mut current_meter = support::CurrentMeter::new_sim([0x40, 0x41, 0x42]);
 
         const CAL_VAL: f32 = 0.04096 / (config::LSB * config::R_SUNT_OM);
         static_assertions::const_assert!(CAL_VAL < u16::MAX as f32);
@@ -566,6 +504,10 @@ mod app {
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
                 modbus1_buffer: bridge::ModbusBuffer::default(),
                 modbus2_buffer: bridge::ModbusBuffer::default(),
+                uart1,
+                re_de1,
+                uart2,
+                re_de2,
             },
             Local {
                 i2c_device: None,
@@ -573,9 +515,45 @@ mod app {
 
                 display: disp,
                 current_meter,
+
+                clocks,
             },
             init::Monotonics(mono),
         )
+    }
+
+    //-------------------------------------------------------------------------
+
+    #[task(binds = USART1, shared = [uart1, re_de1, modbus1_buffer], priority = 4)]
+    fn uart1(ctx: uart1::Context) {
+        let mut uart = ctx.shared.uart1;
+        let mut modbus_buffer = ctx.shared.modbus1_buffer;
+        let mut re_de = ctx.shared.re_de1;
+
+        uart_macro::uart_interrupt!(
+            busname = UART1_BUS_BIND,
+            uart = uart,
+            buffer = modbus_buffer,
+            re_de = re_de,
+            tx2rx_timeout_task =
+                modbus_tx2rx_timeout::spawn_after(config::MODBUS_RESP_TIMEOUT_MS.millis(), 0).ok()
+        );
+    }
+
+    #[task(binds = USART3, shared = [uart2, re_de2, modbus2_buffer], priority = 4)]
+    fn uart3(ctx: uart3::Context) {
+        let mut uart = ctx.shared.uart2;
+        let mut modbus_buffer = ctx.shared.modbus2_buffer;
+        let mut re_de = ctx.shared.re_de2;
+
+        uart_macro::uart_interrupt!(
+            busname = UART2_BUS_BIND,
+            uart = uart,
+            buffer = modbus_buffer,
+            re_de = re_de,
+            tx2rx_timeout_task =
+                modbus_tx2rx_timeout::spawn_after(config::MODBUS_RESP_TIMEOUT_MS.millis(), 1).ok()
+        );
     }
 
     //-------------------------------------------------------------------------
@@ -615,7 +593,7 @@ mod app {
     //-------------------------------------------------------------------------
 
     #[task(shared = [i2c, i2c_scan_addr, display_state], local=[i2c_device, i2c_error_count], priority = 1)]
-    fn i2c_pricess(ctx: i2c_pricess::Context) {
+    fn i2c_process(ctx: i2c_process::Context) {
         let mut i2c_scan_addr = ctx.shared.i2c_scan_addr;
         let mut i2c = ctx.shared.i2c;
         let mut display_state = ctx.shared.display_state;
@@ -744,7 +722,7 @@ mod app {
                 display_state::ScanState::RS485(_) => {}
                 display_state::ScanState::I2C(a) => {
                     i2c_scan_addr.lock(|i2c_scan_addr| *i2c_scan_addr = a);
-                    i2c_pricess::spawn().ok();
+                    i2c_process::spawn().ok();
                 }
             }
         }
@@ -754,25 +732,51 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state, modbus1_buffer, modbus2_buffer], local = [])]
+    #[task(shared = [modbus1_buffer, modbus2_buffer], priority = 2)]
+    fn modbus_tx2rx_timeout(mut ctx: modbus_tx2rx_timeout::Context, bus_num: u32) {
+        match bus_num {
+            0 => ctx.shared.modbus1_buffer.lock(ModbusBuffer::tx_timeout),
+            1 => ctx.shared.modbus2_buffer.lock(ModbusBuffer::tx_timeout),
+            _ => panic!(),
+        }
+        defmt::error!("Modbus bus {} tx->rx timeout", bus_num);
+    }
+
+    //-------------------------------------------------------------------------
+
+    #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state,
+        modbus1_buffer, modbus2_buffer, uart1, uart2,
+        re_de1, re_de2], local = [clocks])]
     fn idle(ctx: idle::Context) -> ! {
-        let mut serial1 = ctx.shared.serial1;
-        let mut serial2 = ctx.shared.serial2;
+        use uart_macro::{process_modbus, try_commit_request, update_line_coding_if_changed};
+
+        fn extract_line_codding<'a>(
+            vcom: &mut CdcAcmClass<'a, UsbBus<Peripheral>>,
+        ) -> MyLineCoding {
+            unsafe { core::mem::transmute_copy::<_, MyLineCoding>(vcom.line_coding()) }
+        }
+
+        let mut v_com1 = ctx.shared.serial1;
+        let mut v_com2 = ctx.shared.serial2;
         let mut hid_i2c = ctx.shared.hid_i2c;
         let mut display_state = ctx.shared.display_state;
 
         let mut i2c = ctx.shared.i2c;
 
+        let mut uart1 = ctx.shared.uart1;
+        let mut uart2 = ctx.shared.uart2;
+
+        let mut re_de1 = ctx.shared.re_de1;
+        let mut re_de2 = ctx.shared.re_de2;
+
         let mut modbus1_buffer = ctx.shared.modbus1_buffer;
         let mut modbus2_buffer = ctx.shared.modbus2_buffer;
 
+        let clocks = ctx.local.clocks;
+
         let mut prev_line_codings = [
-            serial1.lock(|serial1| unsafe {
-                core::mem::transmute_copy::<_, MyLineCoding>(serial1.line_coding())
-            }),
-            serial2.lock(|serial2| unsafe {
-                core::mem::transmute_copy::<_, MyLineCoding>(serial2.line_coding())
-            }),
+            v_com1.lock(extract_line_codding),
+            v_com2.lock(extract_line_codding),
         ];
 
         loop {
@@ -783,20 +787,26 @@ mod app {
                 cortex_m::asm::wfi();
             });
 
-            // read from serial1 -> UART
+            // read from v_com1 -> UART
             process_modbus!(
-                name = "UART",
-                vcom = serial1,
+                name = UART1_BUS_BIND,
+                vcom = v_com1,
+                uart = uart1,
+                re_de = re_de1,
                 buf = modbus1_buffer,
-                prev_line_coding = &mut prev_line_codings[0]
+                prev_line_coding = &mut prev_line_codings[0],
+                clocks = clocks
             );
 
-            // read from serial2 -> RS485
+            // read from v_com2 -> RS485
             process_modbus!(
-                name = "RS485",
-                vcom = serial2,
+                name = UART2_BUS_BIND,
+                vcom = v_com2,
+                uart = uart2,
+                re_de = re_de2,
                 buf = modbus2_buffer,
-                prev_line_coding = &mut prev_line_codings[1]
+                prev_line_coding = &mut prev_line_codings[1],
+                clocks = clocks
             );
 
             // HID-I2C

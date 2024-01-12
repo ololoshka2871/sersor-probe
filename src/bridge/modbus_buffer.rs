@@ -1,4 +1,4 @@
-use modbus_core::rtu::*;
+use modbus_core::rtu::{server, SlaveId};
 
 pub const MODBUS_BUFFER_SIZE_MAX: usize = 256;
 
@@ -9,7 +9,12 @@ pub enum ModbusBufferState {
     },
     ValidRequest {
         size: usize,
-        slave: modbus_core::rtu::SlaveId,
+        slave: SlaveId,
+    },
+    Tx {
+        slave: SlaveId,
+        offset: usize,
+        size: usize,
     },
 }
 
@@ -28,6 +33,10 @@ impl Default for ModbusBuffer {
 }
 
 impl ModbusBuffer {
+    pub fn state(&self) -> &ModbusBufferState {
+        &self.state
+    }
+
     pub fn reset(&mut self) {
         self.state = ModbusBufferState::Idle;
     }
@@ -37,6 +46,7 @@ impl ModbusBuffer {
             ModbusBufferState::Idle => Ok(MODBUS_BUFFER_SIZE_MAX),
             ModbusBufferState::FillingRequest { offset } => Ok(MODBUS_BUFFER_SIZE_MAX - offset),
             ModbusBufferState::ValidRequest { .. } => Err(nb::Error::WouldBlock),
+            ModbusBufferState::Tx { .. } => Err(nb::Error::WouldBlock),
         }
     }
 
@@ -47,7 +57,7 @@ impl ModbusBuffer {
                 &mut self.buffer[..]
             }
             ModbusBufferState::FillingRequest { offset } => &mut self.buffer[offset..],
-            ModbusBufferState::ValidRequest { .. } => panic!(),
+            ModbusBufferState::ValidRequest { .. } | ModbusBufferState::Tx { .. } => panic!(),
         }
     }
 
@@ -60,7 +70,7 @@ impl ModbusBuffer {
                 }
                 *offset += n;
             }
-            ModbusBufferState::ValidRequest { .. } => panic!(),
+            ModbusBufferState::ValidRequest { .. } | ModbusBufferState::Tx { .. } => panic!(),
         }
     }
 
@@ -79,6 +89,56 @@ impl ModbusBuffer {
                 }
             }
             ModbusBufferState::ValidRequest { size, slave } => Ok((&self.buffer[..size], slave)),
+            ModbusBufferState::Tx { .. } => panic!(),
         }
+    }
+
+    pub fn start_tx(&mut self) -> u8 {
+        match self.state {
+            ModbusBufferState::Idle | ModbusBufferState::FillingRequest { .. } => panic!(),
+            ModbusBufferState::ValidRequest { slave, size }
+            | ModbusBufferState::Tx { slave, size, .. } => {
+                self.state = ModbusBufferState::Tx {
+                    slave,
+                    offset: 0,
+                    size,
+                };
+                self.buffer[0]
+            }
+        }
+    }
+
+    pub fn next_tx(&mut self) -> Option<u8> {
+        match &mut self.state {
+            ModbusBufferState::Idle
+            | ModbusBufferState::FillingRequest { .. }
+            | ModbusBufferState::ValidRequest { .. } => None,
+            ModbusBufferState::Tx { offset, size, .. } => {
+                if offset < size {
+                    let b = self.buffer[*offset];
+                    *offset += 1;
+                    Some(b)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    pub fn tx_timeout(&mut self) {
+        match &mut self.state {
+            ModbusBufferState::Tx { .. } => {
+                self.state = ModbusBufferState::Idle;
+            }
+            _ => { /* ignore */ }
+        }
+    }
+}
+
+impl core::ops::Index<usize> for ModbusBuffer {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.buffer[index]
     }
 }

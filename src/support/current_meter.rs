@@ -65,7 +65,7 @@ where
 }
 
 pub struct CurrentMeter<I2C, PINS, const N: usize> {
-    ina219: INA219<I2cWraper<I2C, PINS>>,
+    ina219: Option<INA219<I2cWraper<I2C, PINS>>>,
     address: [u8; N],
 }
 
@@ -75,7 +75,14 @@ where
 {
     pub fn new(i2c: I2cWraper<I2C, PINS>, address: [u8; N]) -> Self {
         Self {
-            ina219: INA219::new(i2c),
+            ina219: Some(INA219::new(i2c)),
+            address,
+        }
+    }
+
+    pub fn new_sim(address: [u8; N]) -> Self {
+        Self {
+            ina219: None,
             address,
         }
     }
@@ -84,8 +91,10 @@ where
         &mut self,
         value: u16,
     ) -> Result<(), <I2cWraper<I2C, PINS> as i2c::Write>::Error> {
-        for address in self.address.iter() {
-            self.ina219.calibrate(value, *address)?;
+        if let Some(ina219) = &mut self.ina219 {
+            for address in self.address.iter() {
+                ina219.calibrate(value, *address)?;
+            }
         }
         Ok(())
     }
@@ -93,34 +102,53 @@ where
     pub fn shunt_voltage(
         &mut self,
     ) -> Result<[i16; N], <I2cWraper<I2C, PINS> as i2c::Read>::Error> {
-        let mut result = [0; N];
-        for (i, address) in self.address.iter().enumerate() {
-            result[i] = self.ina219.shunt_voltage(*address)?;
+        if let Some(ina219) = &mut self.ina219 {
+            let mut result = [0; N];
+            for (i, address) in self.address.iter().enumerate() {
+                result[i] = ina219.shunt_voltage(*address)?;
+            }
+            Ok(result)
+        } else {
+            Err(crate::hw::Error::Bus)
         }
-        Ok(result)
     }
 
     pub fn voltage(&mut self) -> Result<[u16; N], <I2cWraper<I2C, PINS> as i2c::Read>::Error> {
-        let mut result = [0; N];
-        for (i, address) in self.address.iter().enumerate() {
-            result[i] = self.ina219.voltage(*address)?;
+        if let Some(ina219) = &mut self.ina219 {
+            let mut result = [0; N];
+            for (i, address) in self.address.iter().enumerate() {
+                result[i] = ina219.voltage(*address)?;
+            }
+            Ok(result)
+        } else {
+            Err(crate::hw::Error::Bus)
         }
-        Ok(result)
     }
 
     pub fn power(&mut self) -> Result<[i16; N], <I2cWraper<I2C, PINS> as i2c::Read>::Error> {
-        let mut result = [0; N];
-        for (i, address) in self.address.iter().enumerate() {
-            result[i] = self.ina219.power(*address)?;
+        if let Some(ina219) = &mut self.ina219 {
+            let mut result = [0; N];
+            for (i, address) in self.address.iter().enumerate() {
+                result[i] = ina219.power(*address)?;
+            }
+            Ok(result)
+        } else {
+            Err(crate::hw::Error::Bus)
         }
-        Ok(result)
     }
 
-    pub fn current(&mut self, lsb: f32) -> Result<[f32; N], <I2cWraper<I2C, PINS> as i2c::Read>::Error> {
-        let mut result = [0f32; N];
-        for (i, address) in self.address.iter().enumerate() {
-            result[i] = lsb * self.ina219.current(*address)? as f32;
+    pub fn current(
+        &mut self,
+        lsb: f32,
+    ) -> Result<[f32; N], <I2cWraper<I2C, PINS> as i2c::Read>::Error> {
+        if let Some(ina219) = &mut self.ina219 {
+            let mut result = [0f32; N];
+            for (i, address) in self.address.iter().enumerate() {
+                result[i] = lsb * ina219.current(*address)? as f32;
+            }
+            Ok(result)
+        } else {
+            Err(crate::hw::Error::Bus)
         }
-        Ok(result)
     }
 }

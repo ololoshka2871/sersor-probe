@@ -7,7 +7,7 @@ mod i2c_command;
 pub use i2c_command::MyI2COperation;
 
 mod modbus_buffer;
-pub use modbus_buffer::{ModbusBuffer, ModbusBufferState};
+pub use modbus_buffer::{ModbusBuffer, ModbusBufferState, Owner, ModbusBufferBufferLock, RxError};
 
 pub trait Builder<'a>: Sized + Sync {
     /// Create a new scan operation

@@ -38,7 +38,7 @@ use embedded_hal::serial::{Read, Write};
 
 use support::MyLineCoding;
 
-use crate::bridge::{Builder, Execute, ModbusBuffer};
+use crate::bridge::{Builder, Execute};
 
 //-----------------------------------------------------------------------------
 
@@ -574,12 +574,25 @@ mod app {
 
     #[task(shared = [modbus1_buffer, modbus2_buffer], capacity = 2, priority = 2)]
     fn modbus_tx2rx_timeout(mut ctx: modbus_tx2rx_timeout::Context, bus_name: &'static str) {
-        match bus_name {
-            UART1_BUS_BIND => ctx.shared.modbus1_buffer.lock(ModbusBuffer::tx_timeout),
-            UART2_BUS_BIND => ctx.shared.modbus2_buffer.lock(ModbusBuffer::tx_timeout),
+        let restart = match bus_name {
+            UART1_BUS_BIND => ctx
+                .shared
+                .modbus1_buffer
+                .lock(|b| b.tx_test_timeout(UART1_BUS_BIND)),
+            UART2_BUS_BIND => ctx
+                .shared
+                .modbus2_buffer
+                .lock(|b| b.tx_test_timeout(UART2_BUS_BIND)),
             _ => panic!(),
+        };
+
+        if restart {
+            modbus_tx2rx_timeout::spawn_after(
+                config::MODBUS_RESP_TIMEOUT_MS.millis(),
+                bus_name,
+            )
+            .ok();
         }
-        defmt::error!("{}: tx -> rx timeout", bus_name);
     }
 
     //-------------------------------------------------------------------------
@@ -605,6 +618,7 @@ mod app {
 
         let mut uart1 = ctx.shared.uart1;
         let mut uart2 = ctx.shared.uart2;
+        uart1.lock(|u| u.listen(stm32f1xx_hal::serial::Event::Rxne));
 
         let mut re_de1 = ctx.shared.re_de1;
         let mut re_de2 = ctx.shared.re_de2;

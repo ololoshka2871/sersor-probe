@@ -148,17 +148,12 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
                 }
                 _ => {}
             });
-        let res = tx_count == 0 && ready_count == 0 && stored_count > 0;
-        if res {
-            defmt::trace!("Ready to transmit");
-        }
-        res
+        tx_count == 0 && ready_count == 0 && stored_count > 0
     }
 
     pub fn start_tx(&mut self) -> u8 {
         for r in self.pending_requests.iter_mut() {
             if RequestState::Stored == r.state {
-                defmt::trace!("Starting transmitting of {}", r.start.ticks());
                 r.state = RequestState::Tx(1);
                 return r.req_data[0];
             }
@@ -186,7 +181,7 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         data: &[u8],
         adu: ResponseAdu<'r>,
         now: TimerInstantU64<FREQ_HZ>,
-    ) -> Result<(), &'static str> {
+    ) {
         for r in self.pending_requests.iter_mut() {
             if (r.state == RequestState::WaitingForResponse)
                 && (r.req_data[0] == adu.hdr.slave)
@@ -197,20 +192,12 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
                         data: data.to_vec(),
                         ts: now,
                     };
-                    defmt::debug!(
-                        "Got response for request {} with {} ticks",
-                        r.start.ticks(),
-                        (now - r.start).ticks()
-                    );
-                    return Ok(());
                 } else {
-                    defmt::warn!("Request ({}) timeouted", r.start.ticks());
-                    return Err("Request timeouted");
+                    defmt::error!("Request {} timeouted", r.start.ticks());
                 }
+                return;
             }
         }
-
-        Err("Unexpected response")
     }
 
     pub fn try_take_resp(&mut self) -> Option<(Requester, Vec<u8>, TimerInstantU64<FREQ_HZ>)> {

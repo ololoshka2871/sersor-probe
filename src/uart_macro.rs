@@ -136,16 +136,14 @@ macro_rules! uart_interrupt {
                 if let Ok(byte) = rx.read() {
                     if $modbus_assembly_buffer.feed_byte(byte) {
                         if let Some(adu) = $modbus_assembly_buffer.try_decode_response() {
-                            defmt::debug!("{}: {}", $name, defmt::Debug2Format(&adu));
-                            if let Err(e) = $dispatcher.lock(|dispatcher| {
+                            defmt::debug!("{}: Valid response!", $name);
+                            $dispatcher.lock(|dispatcher| {
                                 dispatcher.dispatch_response(
                                     $modbus_assembly_buffer.as_slice(),
                                     adu,
                                     monotonics::MonoTimer::now(),
                                 )
-                            }) {
-                                defmt::error!("{}: {}", $name, e);
-                            }
+                            });
                             $modbus_assembly_buffer.reset();
                         }
                     } else {

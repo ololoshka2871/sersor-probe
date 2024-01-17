@@ -328,8 +328,8 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
-        defmt::info!("Spawn read current task");
+        //read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
+        //defmt::info!("Spawn read current task");
 
         //---------------------------------------------------------------------
 

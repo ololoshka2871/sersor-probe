@@ -379,59 +379,12 @@ mod app {
         let mut dispatcher = ctx.shared.modbus1_dispatcher;
         let mb_assembly_buffer = ctx.local.uart1_mb_assembly_buffer;
 
-        uart.lock(|uart| {
-            if let Some(rx) = uart.rx_irq() {
-                if let Ok(byte) = rx.read() {
-                    if mb_assembly_buffer.feed_byte(byte) {
-                        if let Some(adu) = mb_assembly_buffer.try_decode_response() {
-                            defmt::debug!("UART1: {}", defmt::Debug2Format(&adu));
-                            if let Err(e) = dispatcher.lock(|dispatcher| {
-                                dispatcher.dispatch_response(
-                                    mb_assembly_buffer.as_slice(),
-                                    adu,
-                                    monotonics::MonoTimer::now(),
-                                )
-                            }) {
-                                defmt::error!("UART1: {}", e);
-                            }
-                            mb_assembly_buffer.reset();
-                        }
-                    } else {
-                        defmt::error!("UART1 buffer overflow");
-                        mb_assembly_buffer.reset();
-                    }
-                }
-            } else {
-                if let Some(tx) = uart.tx_irq() {
-                    match dispatcher.lock(bridge::ModbusDispatcher::next_tx) {
-                        Ok(byte) => {
-                            tx.write(byte).ok();
-                        }
-                        Err(Some(ts)) => {
-                            uart.switch_rx();
-                            defmt::trace!("UART1 Tx complete rq_ts: {}", ts.ticks());
-                        }
-                        Err(None) => {
-                            uart.switch_rx();
-                        }
-                    }
-                }
-            }
-        });
-
-        /*
         uart_macro::uart_interrupt!(
             busname = UART1_BUS_BIND,
             uart = uart,
-            buffer = modbus_buffer,
-            re_de = re_de,
-            tx2rx_timeout_task = modbus_tx2rx_timeout::spawn_after(
-                config::MODBUS_RESP_TIMEOUT_MS.millis(),
-                UART1_BUS_BIND
-            )
-            .ok()
+            modbus_dispatcher = dispatcher,
+            modbus_assembly_buffer = mb_assembly_buffer
         );
-        */
     }
 
     #[task(binds = USART3, shared = [uart2, modbus2_dispatcher], local = [uart2_mb_assembly_buffer], priority = 4)]
@@ -440,19 +393,12 @@ mod app {
         let mut dispatcher = ctx.shared.modbus2_dispatcher;
         let mb_assembly_buffer = ctx.local.uart2_mb_assembly_buffer;
 
-        /*
         uart_macro::uart_interrupt!(
             busname = UART2_BUS_BIND,
             uart = uart,
-            buffer = modbus_buffer,
-            re_de = re_de,
-            tx2rx_timeout_task = modbus_tx2rx_timeout::spawn_after(
-                config::MODBUS_RESP_TIMEOUT_MS.millis(),
-                UART2_BUS_BIND
-            )
-            .ok()
+            modbus_dispatcher = dispatcher,
+            modbus_assembly_buffer = mb_assembly_buffer
         );
-        */
     }
 
     //-------------------------------------------------------------------------
@@ -659,7 +605,7 @@ mod app {
     fn idle(ctx: idle::Context) -> ! {
         use bridge::RxBuffer;
         use uart_macro::{
-            process_modbus, serialprocess_line_coding, try_commit_request,
+            process_modbus_dispatcher, serialprocess_line_coding, try_read_vcom, try_tx_to_vcom,
             update_line_coding_if_changed,
         };
 
@@ -683,10 +629,14 @@ mod app {
         let mut modbus1_assembly_buffer =
             support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new();
         let mut modbus1_resp_buffer: Option<support::VecBuffer> = None;
+
+        let mut modbus2_buffer_ready = false;
         let mut modbus2_assembly_buffer =
             support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new();
+        let mut modbus2_resp_buffer: Option<support::VecBuffer> = None;
 
         let mut modbus_dispatcher1 = ctx.shared.modbus1_dispatcher;
+        let mut modbus_dispatcher2 = ctx.shared.modbus2_dispatcher;
 
         let clocks = ctx.local.clocks;
 
@@ -703,123 +653,63 @@ mod app {
                 cortex_m::asm::wfi();
             });
 
-            if !serialprocess_line_coding!(
-                name = UART1_BUS_BIND,
-                vcom = v_com1,
-                uart = uart1,
-                prev_line_coding = &mut prev_line_codings[0],
-                clocks = clocks
-            ) && !modbus1_buffer_ready
             {
-                v_com1.lock(|cdc_acm| {
-                    // try read from USB V_COM
-                    match cdc_acm.read_packet(modbus1_assembly_buffer.write_me()) {
-                        Ok(n) if n > 0 => {
-                            modbus1_assembly_buffer.add_offset(n);
-                            modbus1_buffer_ready =
-                                match modbus1_assembly_buffer.try_decode_request() {
-                                    Some(_r) => true,
-                                    None => {
-                                        if modbus1_assembly_buffer.is_full() {
-                                            defmt::error!("Modbus1 buffer full, drop..");
-                                            modbus1_assembly_buffer.reset();
-                                        }
-                                        false
-                                    }
-                                }
-                        }
-                        _ => {}
-                    }
-                })
-            }
-
-            modbus_dispatcher1.lock(|modbus_dispatcher| {
-                // try commit request
-                if modbus1_buffer_ready {
-                    modbus_dispatcher.push_request(
-                        modbus1_assembly_buffer.as_slice(),
-                        bridge::Requester::USB,
-                        monotonics::MonoTimer::now(),
+                // process V_COM1
+                if !serialprocess_line_coding!(
+                    name = UART1_BUS_BIND,
+                    vcom = v_com1,
+                    uart = uart1,
+                    prev_line_coding = &mut prev_line_codings[0],
+                    clocks = clocks
+                ) && !modbus1_buffer_ready
+                {
+                    try_read_vcom!(
+                        name = UART1_BUS_BIND,
+                        vcom = v_com1,
+                        modbus_assembly_buffer = modbus1_assembly_buffer,
+                        modbus_buffer_ready = modbus1_buffer_ready
                     );
-                    modbus1_assembly_buffer.reset();
-                    modbus1_buffer_ready = false;
                 }
 
-                // try start transmit request
-                if modbus_dispatcher.ready_tx() {
-                    uart1.lock(|uart| {
-                        uart.switch_tx().write(modbus_dispatcher.start_tx()).ok();
-                    })
-                }
+                process_modbus_dispatcher!(
+                    modbus_dispatcher = modbus_dispatcher1,
+                    uart = uart1,
+                    modbus_assembly_buffer = modbus1_assembly_buffer,
+                    modbus_buffer_ready = modbus1_buffer_ready,
+                    modbus_resp_buffer = modbus1_resp_buffer
+                );
 
-                // try take ready response
-                if let (true, Some((requester, resp, _ts))) = (
-                    modbus1_resp_buffer.is_none(),
-                    modbus_dispatcher.try_take_resp(),
-                ) {
-                    if requester & bridge::Requester::USB {
-                        modbus1_resp_buffer.replace(resp.into());
-                    }
-                    if requester & bridge::Requester::Device {
-                        // todo
-                    }
-                }
-            });
-
-            // try Tx to USB V_COM
-            if let Some(tx_buf) = &mut modbus1_resp_buffer {
-                v_com1.lock(|cdc_acm| {
-                    let buf = tx_buf.write_me();
-                    let len = buf.len().min(cdc_acm.max_packet_size() as usize);
-                    match cdc_acm.write_packet(&buf[..len]) {
-                        Ok(writen) => {
-                            defmt::trace!("Transmit chank to V_COM1: {}", writen);
-                            tx_buf.add_offset(writen);
-                        }
-                        Err(e) => {
-                            defmt::error!("V_COM1: {}", defmt::Debug2Format(&e));
-                        }
-                    }
-                });
-
-                // end of transmit
-                if tx_buf.is_full() {
-                    defmt::trace!("V_COM1: Tx complete");
-                    modbus1_resp_buffer = None;
-                }
+                try_tx_to_vcom!(modbus_resp_buffer = modbus1_resp_buffer, vcom = v_com1);
             }
 
-            if !serialprocess_line_coding!(
-                name = UART2_BUS_BIND,
-                vcom = v_com2,
-                uart = uart2,
-                prev_line_coding = &mut prev_line_codings[1],
-                clocks = clocks
-            ) {}
+            {
+                // process V_COM2
+                if !serialprocess_line_coding!(
+                    name = UART2_BUS_BIND,
+                    vcom = v_com2,
+                    uart = uart2,
+                    prev_line_coding = &mut prev_line_codings[1],
+                    clocks = clocks
+                ) && !modbus2_buffer_ready
+                {
+                    try_read_vcom!(
+                        name = UART2_BUS_BIND,
+                        vcom = v_com2,
+                        modbus_assembly_buffer = modbus2_assembly_buffer,
+                        modbus_buffer_ready = modbus2_buffer_ready
+                    );
+                }
 
-            /*
-            // read from v_com1 -> UART
-            process_modbus!(
-                name = UART1_BUS_BIND,
-                vcom = v_com1,
-                uart = uart1,
-                re_de = re_de1,
-                buf = modbus1_buffer,
-                prev_line_coding = &mut prev_line_codings[0],
-                clocks = clocks
-            );
+                process_modbus_dispatcher!(
+                    modbus_dispatcher = modbus_dispatcher2,
+                    uart = uart2,
+                    modbus_assembly_buffer = modbus2_assembly_buffer,
+                    modbus_buffer_ready = modbus2_buffer_ready,
+                    modbus_resp_buffer = modbus2_resp_buffer
+                );
 
-            // read from v_com2 -> RS485
-            process_modbus!(
-                name = UART2_BUS_BIND,
-                vcom = v_com2,
-                uart = uart2,
-                re_de = re_de2,
-                buf = modbus2_buffer,
-                prev_line_coding = &mut prev_line_codings[1],
-                clocks = clocks
-            );
-            */
+                try_tx_to_vcom!(modbus_resp_buffer = modbus2_resp_buffer, vcom = v_com2);
+            }
 
             // HID-I2C
             (&mut hid_i2c, &mut i2c).lock(|hid_i2c, i2c| {

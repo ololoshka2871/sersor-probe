@@ -1,3 +1,5 @@
+use stm32f1xx_hal::serial::{Parity, StopBits};
+
 //-----------------------------------------------------------------------------
 
 pub const XTAL_FREQ: u32 = 16_000_000;
@@ -26,7 +28,7 @@ pub const CDC_ACM_MAX_PACKET_SIZE: u16 = 64;
 
 //-----------------------------------------------------------------------------
 
-pub const CURRENT_READ_INTERVAL_MS: u64 = 500;
+pub const CURRENT_READ_INTERVAL_MS: u64 = 250;
 pub const SCREENSAVER_TIMEOUT_MS: u64 = 10_000;
 pub const CURRENT_THRESHOLD_MA: f32 = 0.1;
 
@@ -41,6 +43,10 @@ pub const R_SUNT_OM: f32 = 0.1;
 pub const LSB: f32 = 10e-6;
 
 //-----------------------------------------------------------------------------
+
+pub const DEFAULT_MODBUS_PARITY: Parity = Parity::ParityNone;
+pub const DEFAULT_MODBUS_STOP_BITS: StopBits = StopBits::STOP1;
+pub const DEFAULT_MODBUS_BAUD_RATE: u32 = 57600;
 
 pub const MODBUS_RESP_TIMEOUT_MS: u64 = 50;
 pub const MODBUS_DISPATCHER_QUEUE_SIZE: usize = 3;

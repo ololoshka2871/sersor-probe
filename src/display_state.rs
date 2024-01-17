@@ -14,6 +14,7 @@ use embedded_graphics::{
     Drawable,
 };
 
+use modbus_core::rtu::SlaveId;
 use ssd1309::mode::GraphicsMode;
 use systick_monotonic::{fugit::TimerInstantU64, ExtU64};
 
@@ -78,8 +79,8 @@ impl Index<&'static str> for CurrentValues {
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum ScanState {
-    UART(u8),
-    RS485(u8),
+    UART(SlaveId),
+    RS485(SlaveId),
     I2C(u8),
 }
 
@@ -270,7 +271,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         match &self.state {
             // идет поиск, пусть идет дальше
             State::DetectingScreen(ss) => Some(*ss),
-            // одет съем показаний, если ток больше crate::config::CURRENT_THRESHOLD_MA, то путь идет дальше
+            // идет съем показаний, если ток больше crate::config::CURRENT_THRESHOLD_MA, то путь идет дальше
             State::OutputDisplayScreen { .. } => {
                 if let Some(ss) = &self.prev_scan_state {
                     if self.current_values[ss.bus_name()] < crate::config::CURRENT_THRESHOLD_MA {

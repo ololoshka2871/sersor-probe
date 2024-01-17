@@ -82,7 +82,6 @@ mod app {
         hid_i2c: usbd_hid::hid_class::HIDClass<'static, UsbBus<Peripheral>>,
 
         i2c: TsensorI2c,
-        i2c_scan_addr: u8,
         display_state: display_state::DisplayState<{ config::SYSTICK_RATE_HZ }>,
 
         uart1: support::UartHalfDuplex<'A', 8, USART1, (PA9<Alternate>, PA10<Input<PullUp>>)>,
@@ -202,6 +201,7 @@ mod app {
         defmt::info!("USB composite device");
 
         //---------------------------------------------------------------------
+
         // UART1
         let uart1 = stm32f1xx_hal::serial::Serial::new(
             ctx.device.USART1,
@@ -210,7 +210,10 @@ mod app {
                 gpioa.pa10.into_pull_up_input(&mut gpioa.crh),
             ),
             &mut afio.mapr,
-            stm32f1xx_hal::serial::Config::default().baudrate(9_600u32.bps()),
+            stm32f1xx_hal::serial::Config::default()
+                .parity(config::DEFAULT_MODBUS_PARITY)
+                .stopbits(config::DEFAULT_MODBUS_STOP_BITS)
+                .baudrate(config::DEFAULT_MODBUS_BAUD_RATE.bps()),
             &clocks,
         );
         let re_de1 = gpioa
@@ -225,7 +228,10 @@ mod app {
                 gpiob.pb11.into_pull_up_input(&mut gpiob.crh),
             ),
             &mut afio.mapr,
-            stm32f1xx_hal::serial::Config::default().baudrate(9_600.bps()),
+            stm32f1xx_hal::serial::Config::default()
+                .parity(config::DEFAULT_MODBUS_PARITY)
+                .stopbits(config::DEFAULT_MODBUS_STOP_BITS)
+                .baudrate(config::DEFAULT_MODBUS_BAUD_RATE.bps()),
             &clocks,
         );
 
@@ -328,8 +334,8 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        //read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
-        //defmt::info!("Spawn read current task");
+        read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
+        defmt::info!("Spawn read current task");
 
         //---------------------------------------------------------------------
 
@@ -340,7 +346,6 @@ mod app {
                 serial2,
                 hid_i2c,
                 i2c: i2c_wraper,
-                i2c_scan_addr: config::I2C_ADDR_MIN,
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
                 modbus1_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
                     config::MODBUS_DISPATCHER_QUEUE_SIZE,
@@ -437,13 +442,10 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [i2c, i2c_scan_addr, display_state], local=[i2c_device, i2c_error_count], priority = 1)]
-    fn i2c_process(ctx: i2c_process::Context) {
-        let mut i2c_scan_addr = ctx.shared.i2c_scan_addr;
+    #[task(shared = [i2c, display_state], local=[i2c_device, i2c_error_count], priority = 1)]
+    fn i2c_process(ctx: i2c_process::Context, mut scan_addr: u8) {
         let mut i2c = ctx.shared.i2c;
         let mut display_state = ctx.shared.display_state;
-
-        let mut scan_addr = i2c_scan_addr.lock(|addr| *addr);
 
         let device = ctx.local.i2c_device;
         let i2c_error_count = ctx.local.i2c_error_count;
@@ -462,7 +464,6 @@ mod app {
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
                         defmt::error!("{} at {} not responding", dev.name(), scan_addr);
-                        i2c_scan_addr.lock(|addr| *addr = 0); // reset
                     }
                     None
                 } else {
@@ -505,15 +506,19 @@ mod app {
                     Err(_) => defmt::trace!("Scanning I2C addr 0x{:X}, no ansver", scan_addr),
                 }
             });
-
-            if scan_addr > config::I2C_ADDR_MIN_MAX {
-                scan_addr = config::I2C_ADDR_MIN;
-            }
-
-            i2c_scan_addr.lock(|addr| *addr = scan_addr);
         }
 
         update_display::spawn().ok(); // update display
+    }
+
+    //-------------------------------------------------------------------------
+
+    #[task(shared = [], local=[], priority = 1)]
+    fn modbus_inquary_process(
+        ctx: modbus_inquary_process::Context,
+        bus_id: &'static str,
+        addr: modbus_core::rtu::SlaveId,
+    ) {
     }
 
     //-------------------------------------------------------------------------
@@ -533,11 +538,10 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [display_state, i2c_scan_addr], local = [current_meter], priority = 1)]
+    #[task(shared = [display_state], local = [current_meter], priority = 1)]
     fn read_current(ctx: read_current::Context) {
         let mut display_state = ctx.shared.display_state;
         let current_meter = ctx.local.current_meter;
-        let mut i2c_scan_addr = ctx.shared.i2c_scan_addr;
 
         let current_values = if let Ok(current) = current_meter.current(config::LSB) {
             defmt::info!("Current: {}", current);
@@ -558,45 +562,23 @@ mod app {
             display_state::CurrentValues::from(values)
         };
 
-        let pricess_state = display_state.lock(move |ds| ds.update_current(current_values));
+        let need_bus_process = display_state.lock(move |ds| ds.update_current(current_values));
 
-        if let Some(state) = pricess_state {
-            match state {
-                display_state::ScanState::UART(_) => { /* todo */ }
-                display_state::ScanState::RS485(_) => { /* todo */ }
-                display_state::ScanState::I2C(a) => {
-                    i2c_scan_addr.lock(|i2c_scan_addr| *i2c_scan_addr = a);
-                    i2c_process::spawn().ok();
-                }
+        match need_bus_process {
+            Some(display_state::ScanState::UART(a)) => {
+                modbus_inquary_process::spawn(UART1_BUS_BIND, a).ok();
             }
+            Some(display_state::ScanState::RS485(a)) => {
+                modbus_inquary_process::spawn(UART2_BUS_BIND, a).ok();
+            }
+            Some(display_state::ScanState::I2C(a)) => {
+                i2c_process::spawn(a).ok();
+            }
+            _ => {}
         }
 
         read_current::spawn_after(config::CURRENT_READ_INTERVAL_MS.millis()).ok();
     }
-
-    //-------------------------------------------------------------------------
-
-    /*
-    #[task(shared = [modbus1_buffer, modbus2_buffer], capacity = 2, priority = 2)]
-    fn modbus_tx2rx_timeout(mut ctx: modbus_tx2rx_timeout::Context, bus_name: &'static str) {
-        let restart = match bus_name {
-            UART1_BUS_BIND => ctx
-                .shared
-                .modbus1_buffer
-                .lock(|b| b.tx_test_timeout(UART1_BUS_BIND)),
-            UART2_BUS_BIND => ctx
-                .shared
-                .modbus2_buffer
-                .lock(|b| b.tx_test_timeout(UART2_BUS_BIND)),
-            _ => panic!(),
-        };
-
-        if restart {
-            modbus_tx2rx_timeout::spawn_after(config::MODBUS_RESP_TIMEOUT_MS.millis(), bus_name)
-                .ok();
-        }
-    }
-    */
 
     //-------------------------------------------------------------------------
 

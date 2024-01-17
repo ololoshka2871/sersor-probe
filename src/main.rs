@@ -343,11 +343,11 @@ mod app {
                 i2c_scan_addr: config::I2C_ADDR_MIN,
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
                 modbus1_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
-                    2,
+                    config::MODBUS_DISPATCHER_QUEUE_SIZE,
                     config::MODBUS_RESP_TIMEOUT_MS.millis(),
                 ),
                 modbus2_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
-                    2,
+                    config::MODBUS_DISPATCHER_QUEUE_SIZE,
                     config::MODBUS_RESP_TIMEOUT_MS.millis(),
                 ),
                 uart1: support::UartHalfDuplex::new(uart1, re_de1),
@@ -679,7 +679,11 @@ mod app {
                     modbus_resp_buffer = modbus1_resp_buffer
                 );
 
-                try_tx_to_vcom!(modbus_resp_buffer = modbus1_resp_buffer, vcom = v_com1);
+                try_tx_to_vcom!(
+                    name = UART1_BUS_BIND,
+                    modbus_resp_buffer = modbus1_resp_buffer,
+                    vcom = v_com1
+                );
             }
 
             {
@@ -708,7 +712,11 @@ mod app {
                     modbus_resp_buffer = modbus2_resp_buffer
                 );
 
-                try_tx_to_vcom!(modbus_resp_buffer = modbus2_resp_buffer, vcom = v_com2);
+                try_tx_to_vcom!(
+                    name = UART1_BUS_BIND,
+                    modbus_resp_buffer = modbus2_resp_buffer,
+                    vcom = v_com2
+                );
             }
 
             // HID-I2C

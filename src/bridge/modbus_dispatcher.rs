@@ -130,24 +130,24 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
     }
 
     pub fn ready_tx(&self) -> bool {
-        let mut stored_count = 0usize;
-        let mut tx_count = 0usize;
-        let mut ready_count = 0usize;
-        self.pending_requests
-            .iter()
-            // TODO replace with reduce
-            .for_each(|req| match &req.state {
-                RequestState::Stored => {
-                    stored_count += 1;
-                }
-                RequestState::Tx(_) => {
-                    tx_count += 1;
-                }
-                RequestState::Success { .. } => {
-                    ready_count += 1;
-                }
-                _ => {}
-            });
+        let (stored_count, tx_count, ready_count) =
+            self.pending_requests
+                .iter()
+                .fold((0usize, 0usize, 0usize), |mut counters, req| {
+                    match &req.state {
+                        RequestState::Stored => {
+                            counters.0 += 1;
+                        }
+                        RequestState::Tx(_) => {
+                            counters.1 += 1;
+                        }
+                        RequestState::Success { .. } => {
+                            counters.2 += 1;
+                        }
+                        _ => {}
+                    }
+                    counters
+                });
         tx_count == 0 && ready_count == 0 && stored_count > 0
     }
 
@@ -208,7 +208,7 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         {
             let r = self.pending_requests.remove(idx);
             if let RequestState::Success { data, ts } = r.state {
-                defmt::trace!("Took response for request {}", r.start.ticks());
+                defmt::trace!("Took response for request T{}", r.start.ticks());
                 Some((r.requester, data, ts))
             } else {
                 None

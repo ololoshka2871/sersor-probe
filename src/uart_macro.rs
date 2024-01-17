@@ -103,25 +103,24 @@ macro_rules! process_modbus_dispatcher {
 }
 
 macro_rules! try_tx_to_vcom {
-    (modbus_resp_buffer=$modbus_resp_buffer: expr, vcom=$v_serial: expr) => {
+    (name=$bus_name: expr, modbus_resp_buffer=$modbus_resp_buffer: expr, vcom=$v_serial: expr) => {
         if let Some(tx_buf) = &mut $modbus_resp_buffer {
             $v_serial.lock(|cdc_acm| {
                 let buf = tx_buf.write_me();
                 let len = buf.len().min(cdc_acm.max_packet_size() as usize);
                 match cdc_acm.write_packet(&buf[..len]) {
                     Ok(writen) => {
-                        defmt::trace!("Transmit chank to V_COM1: {}", writen);
+                        defmt::trace!("Transmit chank to V_{}: {}", $bus_name, writen);
                         tx_buf.add_offset(writen);
                     }
                     Err(e) => {
-                        defmt::error!("V_COM1: {}", defmt::Debug2Format(&e));
+                        defmt::error!("V_{}: {}", $bus_name, defmt::Debug2Format(&e));
                     }
                 }
             });
 
             // end of transmit
             if tx_buf.is_full() {
-                defmt::trace!("V_COM1: Tx complete");
                 $modbus_resp_buffer = None;
             }
         }
@@ -147,7 +146,7 @@ macro_rules! uart_interrupt {
                             $modbus_assembly_buffer.reset();
                         }
                     } else {
-                        defmt::error!("{} buffer overflow", $name);
+                        defmt::error!("{} Rx buffer overflow", $name);
                         $modbus_assembly_buffer.reset();
                     }
                 }
@@ -159,7 +158,7 @@ macro_rules! uart_interrupt {
                         }
                         Err(Some(ts)) => {
                             uart.switch_rx();
-                            defmt::trace!("{} Tx complete rq_ts: {}", $name, ts.ticks());
+                            defmt::trace!("{} Tx complete (T{})", $name, ts.ticks());
                         }
                         Err(None) => {
                             uart.switch_rx();

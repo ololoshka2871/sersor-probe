@@ -42,8 +42,8 @@ pub const LSB: f32 = 10e-6;
 
 //-----------------------------------------------------------------------------
 
-pub const MODBUS_RESP_TIMEOUT_MS: u64 = 75;
+pub const MODBUS_RESP_TIMEOUT_MS: u64 = 50;
 
 //-----------------------------------------------------------------------------
 
-pub const HEAP_SIZE: usize = 2048;
+pub const HEAP_SIZE: usize = 8192;

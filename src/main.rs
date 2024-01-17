@@ -1,6 +1,7 @@
 #![no_main]
 #![no_std]
 #![feature(macro_metavar_expr)]
+#![feature(linked_list_remove)]
 
 pub mod bridge;
 mod config;
@@ -20,10 +21,9 @@ use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Alternate, GpioExt, Input, OpenDrain, Output, PA1, PA10, PA3, PA5, PA7, PA8, PA9, PB10, PB11,
-    PB5, PB6, PB7,
+    Alternate, GpioExt, Input, OpenDrain, Output, PinState, PullUp, PA1, PA10, PA3, PA5, PA7, PA9,
+    PB10, PB11, PB6, PB7,
 };
-use stm32f1xx_hal::serial::Serial;
 use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 use stm32f1xx_hal::time::{Hertz, U32Ext};
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
@@ -34,11 +34,9 @@ use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
 use usbd_serial::CdcAcmClass;
 
-use embedded_hal::serial::{Read, Write};
-
 use support::MyLineCoding;
 
-use crate::bridge::{Builder, Execute};
+use crate::bridge::{BufferTrait, Builder, Execute, RxBuffer};
 
 //-----------------------------------------------------------------------------
 
@@ -63,9 +61,15 @@ const UART2_BUS_BIND: &str = "RS485";
 
 //-----------------------------------------------------------------------------
 
+defmt::timestamp!(
+    "[T{=u64}]",
+    crate::app::monotonics::MonoTimer::now().ticks()
+);
+
+//-----------------------------------------------------------------------------
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [RTCALARM, FLASH, CAN_RX1, CAN_SCE])]
 mod app {
-    use stm32f1xx_hal::gpio::{PinState, PullUp, PushPull};
     use systick_monotonic::*;
 
     use super::*;
@@ -79,15 +83,13 @@ mod app {
 
         i2c: TsensorI2c,
         i2c_scan_addr: u8,
-        display_state: display_state::DisplayState<1000>,
+        display_state: display_state::DisplayState<{ config::SYSTICK_RATE_HZ }>,
 
-        uart1: Serial<USART1, (PA9<Alternate>, PA10<Input<PullUp>>)>,
-        re_de1: PA8<Output<PushPull>>,
-        uart2: Serial<USART3, (PB10<Alternate>, PB11<Input<PullUp>>)>,
-        re_de2: PB5<Output<PushPull>>,
+        uart1: support::UartHalfDuplex<'A', 8, USART1, (PA9<Alternate>, PA10<Input<PullUp>>)>,
+        uart2: support::UartHalfDuplex<'B', 5, USART3, (PB10<Alternate>, PB11<Input<PullUp>>)>,
 
-        modbus1_buffer: bridge::ModbusBuffer,
-        modbus2_buffer: bridge::ModbusBuffer,
+        modbus1_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
+        modbus2_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
     }
 
     #[local]
@@ -110,6 +112,9 @@ mod app {
             3,
         >,
         clocks: stm32f1xx_hal::rcc::Clocks,
+
+        uart1_mb_assembly_buffer: support::Buffer<{ bridge::MODBUS_BUFFER_SIZE_MAX }>,
+        uart2_mb_assembly_buffer: support::Buffer<{ bridge::MODBUS_BUFFER_SIZE_MAX }>,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -337,12 +342,16 @@ mod app {
                 i2c: i2c_wraper,
                 i2c_scan_addr: config::I2C_ADDR_MIN,
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
-                modbus1_buffer: bridge::ModbusBuffer::default(),
-                modbus2_buffer: bridge::ModbusBuffer::default(),
-                uart1,
-                re_de1,
-                uart2,
-                re_de2,
+                modbus1_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
+                    2,
+                    config::MODBUS_RESP_TIMEOUT_MS.millis(),
+                ),
+                modbus2_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
+                    2,
+                    config::MODBUS_RESP_TIMEOUT_MS.millis(),
+                ),
+                uart1: support::UartHalfDuplex::new(uart1, re_de1),
+                uart2: support::UartHalfDuplex::new(uart2, re_de2),
             },
             Local {
                 i2c_device: None,
@@ -352,6 +361,11 @@ mod app {
                 current_meter,
 
                 clocks,
+
+                uart1_mb_assembly_buffer:
+                    support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new(),
+                uart2_mb_assembly_buffer:
+                    support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new(),
             },
             init::Monotonics(mono),
         )
@@ -359,12 +373,53 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(binds = USART1, shared = [uart1, re_de1, modbus1_buffer], priority = 4)]
+    #[task(binds = USART1, shared = [uart1, modbus1_dispatcher], local = [uart1_mb_assembly_buffer], priority = 4)]
     fn uart1(ctx: uart1::Context) {
         let mut uart = ctx.shared.uart1;
-        let mut modbus_buffer = ctx.shared.modbus1_buffer;
-        let mut re_de = ctx.shared.re_de1;
+        let mut dispatcher = ctx.shared.modbus1_dispatcher;
+        let mb_assembly_buffer = ctx.local.uart1_mb_assembly_buffer;
 
+        uart.lock(|uart| {
+            if let Some(rx) = uart.rx_irq() {
+                if let Ok(byte) = rx.read() {
+                    if mb_assembly_buffer.feed_byte(byte) {
+                        if let Some(adu) = mb_assembly_buffer.try_decode_response() {
+                            defmt::debug!("UART1: {}", defmt::Debug2Format(&adu));
+                            if let Err(e) = dispatcher.lock(|dispatcher| {
+                                dispatcher.dispatch_response(
+                                    mb_assembly_buffer.as_slice(),
+                                    adu,
+                                    monotonics::MonoTimer::now(),
+                                )
+                            }) {
+                                defmt::error!("UART1: {}", e);
+                            }
+                            mb_assembly_buffer.reset();
+                        }
+                    } else {
+                        defmt::error!("UART1 buffer overflow");
+                        mb_assembly_buffer.reset();
+                    }
+                }
+            } else {
+                if let Some(tx) = uart.tx_irq() {
+                    match dispatcher.lock(bridge::ModbusDispatcher::next_tx) {
+                        Ok(byte) => {
+                            tx.write(byte).ok();
+                        }
+                        Err(Some(ts)) => {
+                            uart.switch_rx();
+                            defmt::trace!("UART1 Tx complete rq_ts: {}", ts.ticks());
+                        }
+                        Err(None) => {
+                            uart.switch_rx();
+                        }
+                    }
+                }
+            }
+        });
+
+        /*
         uart_macro::uart_interrupt!(
             busname = UART1_BUS_BIND,
             uart = uart,
@@ -376,14 +431,16 @@ mod app {
             )
             .ok()
         );
+        */
     }
 
-    #[task(binds = USART3, shared = [uart2, re_de2, modbus2_buffer], priority = 4)]
+    #[task(binds = USART3, shared = [uart2, modbus2_dispatcher], local = [uart2_mb_assembly_buffer], priority = 4)]
     fn uart3(ctx: uart3::Context) {
         let mut uart = ctx.shared.uart2;
-        let mut modbus_buffer = ctx.shared.modbus2_buffer;
-        let mut re_de = ctx.shared.re_de2;
+        let mut dispatcher = ctx.shared.modbus2_dispatcher;
+        let mb_assembly_buffer = ctx.local.uart2_mb_assembly_buffer;
 
+        /*
         uart_macro::uart_interrupt!(
             busname = UART2_BUS_BIND,
             uart = uart,
@@ -395,6 +452,7 @@ mod app {
             )
             .ok()
         );
+        */
     }
 
     //-------------------------------------------------------------------------
@@ -572,6 +630,7 @@ mod app {
 
     //-------------------------------------------------------------------------
 
+    /*
     #[task(shared = [modbus1_buffer, modbus2_buffer], capacity = 2, priority = 2)]
     fn modbus_tx2rx_timeout(mut ctx: modbus_tx2rx_timeout::Context, bus_name: &'static str) {
         let restart = match bus_name {
@@ -587,21 +646,22 @@ mod app {
         };
 
         if restart {
-            modbus_tx2rx_timeout::spawn_after(
-                config::MODBUS_RESP_TIMEOUT_MS.millis(),
-                bus_name,
-            )
-            .ok();
+            modbus_tx2rx_timeout::spawn_after(config::MODBUS_RESP_TIMEOUT_MS.millis(), bus_name)
+                .ok();
         }
     }
+    */
 
     //-------------------------------------------------------------------------
 
     #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state,
-        modbus1_buffer, modbus2_buffer, uart1, uart2,
-        re_de1, re_de2], local = [clocks])]
+        modbus1_dispatcher, modbus2_dispatcher, uart1, uart2], local = [clocks])]
     fn idle(ctx: idle::Context) -> ! {
-        use uart_macro::{process_modbus, try_commit_request, update_line_coding_if_changed};
+        use bridge::RxBuffer;
+        use uart_macro::{
+            process_modbus, serialprocess_line_coding, try_commit_request,
+            update_line_coding_if_changed,
+        };
 
         fn extract_line_codding<'a>(
             vcom: &mut CdcAcmClass<'a, UsbBus<Peripheral>>,
@@ -618,13 +678,15 @@ mod app {
 
         let mut uart1 = ctx.shared.uart1;
         let mut uart2 = ctx.shared.uart2;
-        uart1.lock(|u| u.listen(stm32f1xx_hal::serial::Event::Rxne));
 
-        let mut re_de1 = ctx.shared.re_de1;
-        let mut re_de2 = ctx.shared.re_de2;
+        let mut modbus1_buffer_ready = false;
+        let mut modbus1_assembly_buffer =
+            support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new();
+        let mut modbus1_resp_buffer: Option<support::VecBuffer> = None;
+        let mut modbus2_assembly_buffer =
+            support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new();
 
-        let mut modbus1_buffer = ctx.shared.modbus1_buffer;
-        let mut modbus2_buffer = ctx.shared.modbus2_buffer;
+        let mut modbus_dispatcher1 = ctx.shared.modbus1_dispatcher;
 
         let clocks = ctx.local.clocks;
 
@@ -641,6 +703,101 @@ mod app {
                 cortex_m::asm::wfi();
             });
 
+            if !serialprocess_line_coding!(
+                name = UART1_BUS_BIND,
+                vcom = v_com1,
+                uart = uart1,
+                prev_line_coding = &mut prev_line_codings[0],
+                clocks = clocks
+            ) && !modbus1_buffer_ready
+            {
+                v_com1.lock(|cdc_acm| {
+                    // try read from USB V_COM
+                    match cdc_acm.read_packet(modbus1_assembly_buffer.write_me()) {
+                        Ok(n) if n > 0 => {
+                            modbus1_assembly_buffer.add_offset(n);
+                            modbus1_buffer_ready =
+                                match modbus1_assembly_buffer.try_decode_request() {
+                                    Some(_r) => true,
+                                    None => {
+                                        if modbus1_assembly_buffer.is_full() {
+                                            defmt::error!("Modbus1 buffer full, drop..");
+                                            modbus1_assembly_buffer.reset();
+                                        }
+                                        false
+                                    }
+                                }
+                        }
+                        _ => {}
+                    }
+                })
+            }
+
+            modbus_dispatcher1.lock(|modbus_dispatcher| {
+                // try commit request
+                if modbus1_buffer_ready {
+                    modbus_dispatcher.push_request(
+                        modbus1_assembly_buffer.as_slice(),
+                        bridge::Requester::USB,
+                        monotonics::MonoTimer::now(),
+                    );
+                    modbus1_assembly_buffer.reset();
+                    modbus1_buffer_ready = false;
+                }
+
+                // try start transmit request
+                if modbus_dispatcher.ready_tx() {
+                    uart1.lock(|uart| {
+                        uart.switch_tx().write(modbus_dispatcher.start_tx()).ok();
+                    })
+                }
+
+                // try take ready response
+                if let (true, Some((requester, resp, _ts))) = (
+                    modbus1_resp_buffer.is_none(),
+                    modbus_dispatcher.try_take_resp(),
+                ) {
+                    if requester & bridge::Requester::USB {
+                        modbus1_resp_buffer.replace(resp.into());
+                    }
+                    if requester & bridge::Requester::Device {
+                        // todo
+                    }
+                }
+            });
+
+            // try Tx to USB V_COM
+            if let Some(tx_buf) = &mut modbus1_resp_buffer {
+                v_com1.lock(|cdc_acm| {
+                    let buf = tx_buf.write_me();
+                    let len = buf.len().min(cdc_acm.max_packet_size() as usize);
+                    match cdc_acm.write_packet(&buf[..len]) {
+                        Ok(writen) => {
+                            defmt::trace!("Transmit chank to V_COM1: {}", writen);
+                            tx_buf.add_offset(writen);
+                        }
+                        Err(e) => {
+                            defmt::error!("V_COM1: {}", defmt::Debug2Format(&e));
+                        }
+                    }
+                });
+
+                // end of transmit
+                if tx_buf.is_full() {
+                    defmt::trace!("V_COM1: Tx complete");
+                    modbus1_resp_buffer = None;
+                }
+            }
+
+            if !serialprocess_line_coding!(
+                name = UART2_BUS_BIND,
+                vcom = v_com2,
+                uart = uart2,
+                prev_line_coding = &mut prev_line_codings[1],
+                clocks = clocks
+            ) {}
+
+            /*
             // read from v_com1 -> UART
             process_modbus!(
                 name = UART1_BUS_BIND,
@@ -662,6 +819,7 @@ mod app {
                 prev_line_coding = &mut prev_line_codings[1],
                 clocks = clocks
             );
+            */
 
             // HID-I2C
             (&mut hid_i2c, &mut i2c).lock(|hid_i2c, i2c| {

@@ -9,6 +9,14 @@ pub use i2c_command::MyI2COperation;
 mod modbus_buffer;
 pub use modbus_buffer::{ModbusBuffer, ModbusBufferState, Owner, ModbusBufferBufferLock, RxError};
 
+mod modbus_buffer_traits;
+pub use modbus_buffer_traits::{RxBuffer, BufferTrait};
+
+mod modbus_dispatcher;
+pub use modbus_dispatcher::{ModbusDispatcher, Requester};
+
+pub const MODBUS_BUFFER_SIZE_MAX: usize = 256;
+
 pub trait Builder<'a>: Sized + Sync {
     /// Create a new scan operation
     fn new_scan_op(data_buff: &'a mut [u8; 4], scan_addr: u8) -> Self;

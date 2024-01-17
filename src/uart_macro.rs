@@ -40,6 +40,27 @@ pub fn try_commit_request(mut buf: ModbusBufferBufferLock, bus_name: &'static st
     }
 }
 
+macro_rules! serialprocess_line_coding {
+    (name=$bus_name: expr, vcom=$v_serial: expr, uart=$uart: expr, prev_line_coding=$prev_line_coding: expr, clocks=$clocks: expr) => {{
+        let lc_changed = $v_serial.lock(|serial| {
+            update_line_coding_if_changed($prev_line_coding, serial.line_coding(), $bus_name)
+        });
+        if lc_changed {
+            // reconfigure uart if line coding changed
+            $uart.lock(|uart| {
+                if let Err(e) = uart.reconfigure(*$prev_line_coding, $clocks) {
+                    defmt::error!(
+                        "{} reconfigure error: {:?}",
+                        $bus_name,
+                        defmt::Debug2Format(&e)
+                    );
+                }
+            });
+        }
+        lc_changed
+    }};
+}
+
 macro_rules! process_modbus {
     (name=$bus_name: expr, vcom=$v_serial: expr, uart=$uart: expr, re_de=$re_de: expr,
         buf=$modbus_buffer: expr, prev_line_coding=$prev_line_coding: expr, clocks=$clocks: expr) => {{
@@ -211,4 +232,5 @@ macro_rules! uart_interrupt {
 }
 
 pub(crate) use process_modbus;
+pub(crate) use serialprocess_line_coding;
 pub(crate) use uart_interrupt;

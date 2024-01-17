@@ -1,6 +1,6 @@
 use modbus_core::rtu::{server, SlaveId};
 
-pub const MODBUS_BUFFER_SIZE_MAX: usize = 256;
+use super::MODBUS_BUFFER_SIZE_MAX;
 
 #[derive(Clone, PartialEq, Debug, defmt::Format)]
 pub enum ModbusBufferState {

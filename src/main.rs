@@ -307,7 +307,7 @@ mod app {
                 ),
                 &mut afio.mapr,
                 embedded_hal::spi::MODE_2, // !
-                Hertz::MHz(5),             // работает на 5 МГц
+                Hertz::MHz(8),             // работает на 5 МГц
                 clocks,
             ),
             gpioa.pa3.into_push_pull_output(&mut gpioa.crl),
@@ -315,7 +315,7 @@ mod app {
         );
 
         let mut disp: ssd1309::prelude::GraphicsMode<_> = ssd1309::Builder::new()
-            .with_rotation(ssd1309::displayrotation::DisplayRotation::Rotate90)
+            .with_rotation(ssd1309::displayrotation::DisplayRotation::Rotate270)
             .connect(di)
             .into();
         let syst = {
@@ -701,8 +701,8 @@ mod app {
 
             let fi = monotonics::MonoTimer::now().ticks() as f32;
             let values = [
-                ((fi / 25670.3 + 1.1).sin() * 10f32).max(-0.5),
-                ((fi / 35040.0 + 5.3).sin() * 2f32).max(-0.2),
+                ((fi / 25670.3 + 1.1).sin() * 10f32).max(-0.1),
+                ((fi / 35040.0 + 5.3).sin() * 2f32).max(-0.1),
                 ((fi / 10010.1 + 2.1).sin() * 6f32).max(-0.1),
             ];
 

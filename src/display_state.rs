@@ -70,8 +70,8 @@ impl Index<&'static str> for CurrentValues {
     fn index(&self, index: &'static str) -> &Self::Output {
         match index {
             "UART" => &self.uart,
-            "485 " => &self.rs485,
-            "I2C " => &self.i2c,
+            "485" => &self.rs485,
+            "I2C" => &self.i2c,
             _ => panic!(),
         }
     }
@@ -92,8 +92,8 @@ impl ScanState {
     pub fn bus_name_from_usize(bus: usize) -> &'static str {
         match bus {
             0 => "UART",
-            1 => "485 ",
-            2 => "I2C ",
+            1 => "485",
+            2 => "I2C",
             _ => panic!(),
         }
     }
@@ -291,15 +291,18 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             }
             // идет мониторинг, если ток больше crate::config::CURRENT_THRESHOLD_MA, то начинаем сканирование это шины
             State::CurrentMonitoringScreen { .. } => {
-                if current_values[0] > crate::config::CURRENT_THRESHOLD_MA {
-                    Some(ScanState::UART(0))
-                } else if current_values[1] > crate::config::CURRENT_THRESHOLD_MA {
-                    Some(ScanState::RS485(0))
-                } else if current_values[2] > crate::config::CURRENT_THRESHOLD_MA {
-                    Some(ScanState::I2C(0))
-                } else {
-                    None
-                }
+                let mut arr = alloc::vec![
+                    (ScanState::UART(0), current_values[0]),
+                    (ScanState::RS485(0), current_values[1]),
+                    (ScanState::I2C(0), current_values[2])
+                ];
+                arr.sort_by(|(_, ia), (_, ib)| {
+                    ib.partial_cmp(ia).unwrap_or(core::cmp::Ordering::Equal)
+                });
+
+                arr.iter()
+                    .find(|(_, i)| *i > crate::config::CURRENT_THRESHOLD_MA)
+                    .map(|(s, _)| *s)
             }
             // остальные состояния не требуют обновления
             State::WellcomeScreen { .. } | State::DisconnectScreen { .. } => None,
@@ -601,7 +604,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     {
         for c in 0..self.current_values.len() {
             let string = format!(
-                "{}: {}",
+                "{:>4}: {:>4}",
                 ScanState::bus_name_from_usize(c),
                 format_float_simple(self.current_values[c], 1)
             );

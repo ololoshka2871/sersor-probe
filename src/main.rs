@@ -45,6 +45,8 @@ type TsensorI2c = hw::I2cWraper<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<
 pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
     &[&devices::DeviceDba0];
 
+pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice<Error = u32>] = &[&devices::DeviceDba0];
+
 //-----------------------------------------------------------------------------
 
 // Global allocator
@@ -101,7 +103,7 @@ mod app {
         i2c_error_count: u8,
 
         modbus_device:
-            Option<&'static dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>>,
+            Option<&'static dyn devices::ModbusDevice<Error = u32>>,
         modbus_error_count: u8,
 
         display: ssd1309::mode::GraphicsMode<
@@ -473,10 +475,10 @@ mod app {
             if let Some(storage) = i2c.lock(|i2c| {
                 let mut storage = dev.make_storage();
                 if let Err(e) = dev.read_i2c(scan_addr, storage.as_mut(), i2c) {
-                    defmt::error!("{} at {} error: {}", dev.name(), scan_addr, e);
+                    defmt::error!("{} @ {} error: {}", dev.name(), scan_addr, e);
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
-                        defmt::error!("{} at {} not responding", dev.name(), scan_addr);
+                        defmt::error!("{} @ {} not responding", dev.name(), scan_addr);
                     }
                     None
                 } else {
@@ -539,7 +541,7 @@ mod app {
         let mut display_state = ctx.shared.display_state;
 
         let device = ctx.local.modbus_device;
-        let _modbus_error_count = ctx.local.modbus_error_count;
+        let modbus_error_count = ctx.local.modbus_error_count;
 
         // reset
         if scan_addr == 0 {
@@ -552,7 +554,26 @@ mod app {
             match rx.lock(|rx| rx.take()) {
                 Some((data, rx_bus)) if rx_bus == bus_id => {
                     data.as_slice().try_decode_response().map(|resp| {
-                        defmt::debug!("Got response from {} at {}", bus_id, resp.hdr.slave);
+                        defmt::info!(
+                            "Scanning {} addr 0x{:X}, something detected!",
+                            bus_id,
+                            resp.hdr.slave
+                        );
+
+                        for dev in MODBUS_DEVICES {
+                            if let Err(e) = dev.probe_resp(resp) {
+                                defmt::error!("{} error: {}", dev.name(), e);
+                            } else {
+                                defmt::info!("{} found!", dev.name());
+
+                                device.replace(*dev);
+                                *modbus_error_count = 0;
+                            }
+                        }
+
+                        if device.is_none() {
+                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr)
+                        }
                     });
                 }
                 _ => {

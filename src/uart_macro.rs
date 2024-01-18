@@ -65,18 +65,29 @@ macro_rules! try_read_vcom {
 }
 
 macro_rules! process_modbus_dispatcher {
-    (modbus_dispatcher=$modbus_dispatcher: expr, uart=$uart: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr,
-        modbus_buffer_ready=$modbus_buffer_ready: expr, modbus_resp_buffer=$modbus_resp_buffer: expr) => {
+    (name=$bus_name: expr, modbus_dispatcher=$modbus_dispatcher: expr, uart=$uart: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr,
+        modbus_buffer_ready=$modbus_buffer_ready: expr, modbus_resp_buffer=$modbus_resp_buffer: expr, 
+        device_request=$device_request: expr, device_response=$device_response: expr) => {
         $modbus_dispatcher.lock(|modbus_dispatcher| {
             // try commit request
+            let now = monotonics::MonoTimer::now();
             if $modbus_buffer_ready {
-                modbus_dispatcher.push_request(
+                modbus_dispatcher.push_raw_request(
                     $modbus_assembly_buffer.as_slice(),
                     bridge::Requester::USB,
-                    monotonics::MonoTimer::now(),
+                    now,
                 );
                 $modbus_assembly_buffer.reset();
                 $modbus_buffer_ready = false;
+            } else {
+                $device_request.lock(|device_request| match device_request.as_ref() {
+                    Some((dr, bus_name)) if bus_name == &$bus_name => {
+                        if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
+                            *device_request = None;
+                        }
+                    }
+                    _ => {}
+                });
             }
 
             // try start transmit request
@@ -91,11 +102,13 @@ macro_rules! process_modbus_dispatcher {
                 $modbus_resp_buffer.is_none(),
                 modbus_dispatcher.try_take_resp(),
             ) {
+                if requester & bridge::Requester::Device {
+                    $device_response.lock(|device_response| {
+                        device_response.replace((resp.clone(), $bus_name));
+                    });
+                }
                 if requester & bridge::Requester::USB {
                     $modbus_resp_buffer.replace(resp.into());
-                }
-                if requester & bridge::Requester::Device {
-                    // todo
                 }
             }
         });
@@ -126,7 +139,6 @@ macro_rules! try_tx_to_vcom {
         }
     };
 }
-
 
 macro_rules! uart_interrupt {
     (busname=$name: expr, uart=$uart:expr, modbus_dispatcher=$dispatcher: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr) => {

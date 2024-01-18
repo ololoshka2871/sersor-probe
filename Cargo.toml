@@ -37,7 +37,7 @@ cortex-m-rtic = { version = "1.1" }
 systick-monotonic = "1.0.1"
 
 # modbus
-modbus-core = { git = "https://github.com/slowtec/modbus-core.git", rev = "c9aba53f95917b994bac6c2693ac54fbb6137d51", default-features = false, features = ["rtu"] }
+modbus-core = { path = "modbus-core", default-features = false, features = ["rtu"] }
 
 # display
 display-interface = "0.4"

@@ -98,7 +98,7 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         }
     }
 
-    pub fn push_request<'r>(
+    pub fn push_raw_request<'r>(
         &mut self,
         buf: &[u8],
         requester: Requester,
@@ -127,6 +127,23 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
 
             true
         }
+    }
+
+    pub fn push_request<'r>(
+        &mut self,
+        req: &modbus_core::rtu::RequestAdu<'r>,
+        requester: Requester,
+        now: TimerInstantU64<FREQ_HZ>,
+    ) -> bool {
+        let len = req.pdu.0.pdu_len()
+            + core::mem::size_of_val(&req.hdr.slave)
+            + core::mem::size_of::<u16>();
+        let mut buf = Vec::with_capacity(len);
+        buf.resize(len, 0);
+
+        modbus_core::rtu::client::encode_request(req, &mut buf).unwrap();
+
+        self.push_raw_request(&buf, requester, now)
     }
 
     pub fn ready_tx(&self) -> bool {

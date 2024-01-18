@@ -89,6 +89,9 @@ mod app {
 
         modbus1_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
         modbus2_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
+
+        device_modbus_request: Option<(modbus_core::rtu::RequestAdu<'static>, &'static str)>,
+        device_modbus_response: Option<(alloc::vec::Vec<u8>, &'static str)>,
     }
 
     #[local]
@@ -96,6 +99,10 @@ mod app {
         i2c_device:
             Option<&'static dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>>,
         i2c_error_count: u8,
+
+        modbus_device:
+            Option<&'static dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>>,
+        modbus_error_count: u8,
 
         display: ssd1309::mode::GraphicsMode<
             display_interface_spi::SPIInterface<
@@ -357,10 +364,16 @@ mod app {
                 ),
                 uart1: support::UartHalfDuplex::new(uart1, re_de1),
                 uart2: support::UartHalfDuplex::new(uart2, re_de2),
+
+                device_modbus_request: None,
+                device_modbus_response: None,
             },
             Local {
                 i2c_device: None,
                 i2c_error_count: 0,
+
+                modbus_device: None,
+                modbus_error_count: 0,
 
                 display: disp,
                 current_meter,
@@ -513,12 +526,69 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [], local=[], priority = 1)]
+    #[task(shared = [display_state, device_modbus_request, device_modbus_response], local=[modbus_device, modbus_error_count], priority = 1)]
     fn modbus_inquary_process(
         ctx: modbus_inquary_process::Context,
         bus_id: &'static str,
-        addr: modbus_core::rtu::SlaveId,
+        mut scan_addr: modbus_core::rtu::SlaveId,
     ) {
+        let (mut tx, mut rx) = (
+            ctx.shared.device_modbus_request,
+            ctx.shared.device_modbus_response,
+        );
+        let mut display_state = ctx.shared.display_state;
+
+        let device = ctx.local.modbus_device;
+        let _modbus_error_count = ctx.local.modbus_error_count;
+
+        // reset
+        if scan_addr == 0 {
+            *device = None;
+        }
+
+        if let Some(_dev) = device {
+            // Known device on known address
+        } else {
+            match rx.lock(|rx| rx.take()) {
+                Some((data, rx_bus)) if rx_bus == bus_id => {
+                    data.as_slice().try_decode_response().map(|resp| {
+                        defmt::debug!("Got response from {} at {}", bus_id, resp.hdr.slave);
+                    });
+                }
+                _ => {
+                    scan_addr += 1;
+                    if scan_addr > bridge::MODBUS_ADDR_MAX {
+                        scan_addr = 0;
+                    }
+
+                    // send scan request read holding register 0
+                    let req = modbus_core::rtu::RequestAdu {
+                        hdr: modbus_core::rtu::Header { slave: scan_addr },
+                        pdu: modbus_core::RequestPdu(modbus_core::Request::ReadHoldingRegisters(
+                            0x00, 0x01,
+                        )),
+                    };
+
+                    tx.lock(|tx| {
+                        if tx.is_none() {
+                            tx.replace((req, bus_id));
+                        } else if scan_addr > 1 {
+                            scan_addr -= 1;
+                        }
+                    });
+
+                    display_state.lock(|display_state| {
+                        display_state.scan(match bus_id {
+                            UART1_BUS_BIND => display_state::ScanState::UART(scan_addr),
+                            UART2_BUS_BIND => display_state::ScanState::RS485(scan_addr),
+                            _ => panic!(),
+                        })
+                    });
+                }
+            }
+        }
+
+        update_display::spawn().ok(); // update display
     }
 
     //-------------------------------------------------------------------------
@@ -583,7 +653,8 @@ mod app {
     //-------------------------------------------------------------------------
 
     #[idle(shared=[serial1, serial2, hid_i2c, i2c, display_state,
-        modbus1_dispatcher, modbus2_dispatcher, uart1, uart2], local = [clocks])]
+        modbus1_dispatcher, modbus2_dispatcher, uart1, uart2,
+        device_modbus_request, device_modbus_response], local = [clocks])]
     fn idle(ctx: idle::Context) -> ! {
         use bridge::RxBuffer;
         use uart_macro::{
@@ -620,6 +691,9 @@ mod app {
         let mut modbus_dispatcher1 = ctx.shared.modbus1_dispatcher;
         let mut modbus_dispatcher2 = ctx.shared.modbus2_dispatcher;
 
+        let mut device_modbus_request = ctx.shared.device_modbus_request;
+        let mut device_modbus_response = ctx.shared.device_modbus_response;
+
         let clocks = ctx.local.clocks;
 
         let mut prev_line_codings = [
@@ -654,11 +728,14 @@ mod app {
                 }
 
                 process_modbus_dispatcher!(
+                    name = UART1_BUS_BIND,
                     modbus_dispatcher = modbus_dispatcher1,
                     uart = uart1,
                     modbus_assembly_buffer = modbus1_assembly_buffer,
                     modbus_buffer_ready = modbus1_buffer_ready,
-                    modbus_resp_buffer = modbus1_resp_buffer
+                    modbus_resp_buffer = modbus1_resp_buffer,
+                    device_request = device_modbus_request,
+                    device_response = device_modbus_response
                 );
 
                 try_tx_to_vcom!(
@@ -687,11 +764,14 @@ mod app {
                 }
 
                 process_modbus_dispatcher!(
+                    name = UART2_BUS_BIND,
                     modbus_dispatcher = modbus_dispatcher2,
                     uart = uart2,
                     modbus_assembly_buffer = modbus2_assembly_buffer,
                     modbus_buffer_ready = modbus2_buffer_ready,
-                    modbus_resp_buffer = modbus2_resp_buffer
+                    modbus_resp_buffer = modbus2_resp_buffer,
+                    device_request = device_modbus_request,
+                    device_response = device_modbus_response
                 );
 
                 try_tx_to_vcom!(

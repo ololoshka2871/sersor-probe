@@ -16,6 +16,7 @@ mod modbus_dispatcher;
 pub use modbus_dispatcher::{ModbusDispatcher, Requester};
 
 pub const MODBUS_BUFFER_SIZE_MAX: usize = 256;
+pub const MODBUS_ADDR_MAX: u8 = 247;
 
 pub trait Builder<'a>: Sized + Sync {
     /// Create a new scan operation

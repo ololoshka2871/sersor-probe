@@ -269,8 +269,14 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         self.current_values = current_values;
 
         match &self.state {
-            // идет поиск, пусть идет дальше
-            State::DetectingScreen(ss) => Some(*ss),
+            // идет поиск, пусть идет дальше если есть ток
+            State::DetectingScreen(ss) => {
+                if current_values[ss.to_selected_current()] > crate::config::CURRENT_THRESHOLD_MA {
+                    Some(*ss)
+                } else {
+                    None
+                }
+            }
             // идет съем показаний, если ток больше crate::config::CURRENT_THRESHOLD_MA, то путь идет дальше
             State::OutputDisplayScreen { .. } => {
                 if let Some(ss) = &self.prev_scan_state {
@@ -931,7 +937,15 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             }
             State::DetectingScreen(s) => {
                 self.prev_scan_state = Some(*s);
-                false
+                if self.current_values[s.to_selected_current()]
+                    <= crate::config::CURRENT_THRESHOLD_MA
+                {
+                    let (s, r) = recalc_i_mon_animation(time, 0, None);
+                    self.state = s;
+                    r
+                } else {
+                    false
+                }
             }
             State::OutputDisplayScreen { .. } => {
                 if let Some(ss) = self.prev_scan_state {
@@ -975,14 +989,8 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             } => {
                 let (s, r) =
                     recalc_i_mon_animation(*start, *current_animation_step, Some(*star_base_pos));
-
-                if self.current_values["I2C"] > crate::config::CURRENT_THRESHOLD_MA {
-                    self.state = State::DetectingScreen(ScanState::I2C(0));
-                    true
-                } else {
-                    self.state = s;
-                    r
-                }
+                self.state = s;
+                r
             }
         }
     }

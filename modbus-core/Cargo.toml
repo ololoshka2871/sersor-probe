@@ -1,0 +1,23 @@
+[package]
+name = "modbus-core"
+description = "Modbus base library"
+version = "0.0.0"
+authors = ["slowtec GmbH", "Markus Kohlhase <markus.kohlhase@slowtec.de>"]
+license = "MIT/Apache-2.0"
+keywords = ["fieldbus", "modbus", "hardware", "automation"]
+homepage = "https://github.com/slowtec/modbus-core"
+repository = "https://github.com/slowtec/modbus-core"
+edition = "2018"
+
+[dependencies]
+log = "0.4"
+byteorder = { version =  "1.4", default-features = false }
+
+[features]
+default = ["tcp", "rtu"]
+tcp = []
+rtu = []
+std = ["byteorder/std"]
+
+[badges]
+maintenance = { status = "actively-developed" }

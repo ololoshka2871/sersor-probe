@@ -4,7 +4,7 @@ mod i2c_device;
 pub use i2c_device::{I2CAddress, I2CDevice};
 
 mod modbus_device;
-pub use modbus_device::ModbusDevice;
+pub use modbus_device::{ModbusDevice, DecodeError};
 
 pub trait ValuesStorage: Send {
     fn size(&self) -> usize;

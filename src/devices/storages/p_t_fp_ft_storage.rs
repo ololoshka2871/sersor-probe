@@ -61,7 +61,7 @@ impl ValuesStorage for PTFpFtstorage {
             f(self.ft, 2)
         )
         .ok();
-        write!(s, "}}").ok();
+        write!(s, " }}").ok();
         s
     }
 

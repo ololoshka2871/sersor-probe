@@ -69,9 +69,9 @@ impl Index<&'static str> for CurrentValues {
 
     fn index(&self, index: &'static str) -> &Self::Output {
         match index {
-            "232" => &self.uart,
-            "485" => &self.rs485,
-            "I2C" => &self.i2c,
+            "UART" => &self.uart,
+            "485 " => &self.rs485,
+            "I2C " => &self.i2c,
             _ => panic!(),
         }
     }
@@ -91,9 +91,9 @@ impl ScanState {
 
     pub fn bus_name_from_usize(bus: usize) -> &'static str {
         match bus {
-            0 => "232",
-            1 => "485",
-            2 => "I2C",
+            0 => "UART",
+            1 => "485 ",
+            2 => "I2C ",
             _ => panic!(),
         }
     }

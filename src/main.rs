@@ -478,6 +478,7 @@ mod app {
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
                         defmt::error!("{} @ {} not responding", dev.name(), scan_addr);
+                        scan_addr = 0; // reset
                     }
                     None
                 } else {
@@ -548,7 +549,12 @@ mod app {
             *device = None;
         }
 
-        let mut try_send_data_req = |req: modbus_core::rtu::RequestAdu<'static>| -> bool {
+        let mut try_send_ddata_req = |device: &dyn devices::ModbusDevice| -> bool {
+            let req = modbus_core::rtu::RequestAdu {
+                hdr: modbus_core::rtu::Header { slave: scan_addr },
+                pdu: device.build_data_request(),
+            };
+
             tx.lock(|tx| {
                 if tx.is_none() {
                     tx.replace((req, bus_id));
@@ -557,6 +563,16 @@ mod app {
                     false
                 }
             })
+        };
+
+        let mut report_scan = |scan_addr| {
+            display_state.lock(|display_state| {
+                display_state.scan(match bus_id {
+                    UART1_BUS_BIND => display_state::ScanState::UART(scan_addr),
+                    UART2_BUS_BIND => display_state::ScanState::RS485(scan_addr),
+                    _ => panic!(),
+                })
+            });
         };
 
         let rx_data = rx.lock(|rx| rx.take());
@@ -590,13 +606,11 @@ mod app {
                 *modbus_error_count += 1;
                 if *modbus_error_count >= config::MODBUS_ERROR_MAX_COUNT {
                     defmt::error!("{} @ {} not responding", dev.name(), scan_addr);
+                    report_scan(0); // reset
                 }
             }
 
-            try_send_data_req(modbus_core::rtu::RequestAdu {
-                hdr: modbus_core::rtu::Header { slave: scan_addr },
-                pdu: dev.build_data_request(),
-            });
+            try_send_ddata_req(*dev);
         } else {
             // Scan for device
             match rx_data {
@@ -616,6 +630,8 @@ mod app {
 
                                 device.replace(*dev);
                                 *modbus_error_count = 0;
+
+                                try_send_ddata_req(*dev);
                             }
                         }
 
@@ -630,23 +646,23 @@ mod app {
                         scan_addr = 0;
                     }
 
-                    if !try_send_data_req(modbus_core::rtu::RequestAdu {
+                    // send scan request read holding register 0
+                    let req = modbus_core::rtu::RequestAdu {
                         hdr: modbus_core::rtu::Header { slave: scan_addr },
                         pdu: modbus_core::RequestPdu(modbus_core::Request::ReadHoldingRegisters(
                             0x00, 0x01,
                         )),
-                    }) && scan_addr > 1
-                    {
-                        scan_addr -= 1;
-                    }
+                    };
 
-                    display_state.lock(|display_state| {
-                        display_state.scan(match bus_id {
-                            UART1_BUS_BIND => display_state::ScanState::UART(scan_addr),
-                            UART2_BUS_BIND => display_state::ScanState::RS485(scan_addr),
-                            _ => panic!(),
-                        })
+                    tx.lock(|tx| {
+                        if tx.is_none() {
+                            tx.replace((req, bus_id));
+                        } else if scan_addr > 1 {
+                            scan_addr -= 1;
+                        }
                     });
+
+                    report_scan(scan_addr);
                 }
             }
         }

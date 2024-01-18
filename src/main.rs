@@ -860,24 +860,31 @@ mod app {
                 );
             }
 
-            // HID-I2C
-            (&mut hid_i2c, &mut i2c).lock(|hid_i2c, i2c| {
-                let mut buf = [0u8; 64];
-                if let Ok(_) = hid_i2c.pull_raw_output(&mut buf) {
-                    match bridge::MyI2COperation::on(&mut buf).execute(i2c) {
-                        Ok(result) => {
+            {
+                // HID-I2C
+                let (res, mut buf) = hid_i2c.lock(|hid_i2c| {
+                    let mut buf = [0u8; 64];
+                    let res = hid_i2c.pull_raw_output(&mut buf);
+                    (res, buf)
+                });
+
+                if res.is_ok() {
+                    match i2c.lock(|i2c| bridge::MyI2COperation::on(&mut buf).execute(i2c)) {
+                        Ok(_result) => {
                             defmt::trace!("I2C operation success");
-                            hid_i2c.push_raw_input(result).ok();
                         }
                         Err(e) => {
-                            defmt::error!("I2C error: {:?}", e);
+                            defmt::error!("I2C error: {}", e);
                             buf[0] = e.into();
                             buf[1] = 0;
-                            hid_i2c.push_raw_input(&buf).ok();
                         }
                     }
+
+                    if let Err(e) = hid_i2c.lock(move |hid_i2c| hid_i2c.push_raw_input(&buf)) {
+                        defmt::error!("HID-I2C push error: {}", defmt::Debug2Format(&e));
+                    }
                 }
-            });
+            }
 
             // display
             if display_state.lock(|state| state.animate(monotonics::MonoTimer::now())) {

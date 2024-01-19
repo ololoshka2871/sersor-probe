@@ -4,7 +4,7 @@ mod format_float_simple;
 pub use format_float_simple::format_float_simple;
 
 mod hid_descriptor;
-pub use hid_descriptor::HidDescriptor;
+pub use hid_descriptor::{HidDescriptor, HID_REPORT_SIZE};
 
 mod current_meter;
 pub use current_meter::CurrentMeter;

@@ -395,125 +395,126 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
     where
         DI: display_interface::WriteOnlyDataCommand,
     {
+        #[derive(Clone, Copy)]
+        enum StarState {
+            Point,
+            Small,
+            Big,
+            Outage,
+            #[allow(dead_code)]
+            Invalid,
+        }
+
+        impl StarState {
+            fn from_animation_step(step: u32) -> Self {
+                match step % 4 {
+                    0 => StarState::Point,
+                    1 => StarState::Small,
+                    2 => StarState::Big,
+                    3 => StarState::Outage,
+                    _ => unreachable!(),
+                }
+            }
+
+            fn invert(self) -> Self {
+                match self {
+                    StarState::Point => StarState::Outage,
+                    StarState::Small => StarState::Big,
+                    StarState::Big => StarState::Small,
+                    StarState::Outage => StarState::Point,
+                    StarState::Invalid => StarState::Point,
+                }
+            }
+        }
+
+        fn draw_cross<DI: display_interface::WriteOnlyDataCommand>(
+            display: &mut GraphicsMode<DI>,
+            mut center: Point,
+            size: Size,
+            fill_color: BinaryColor,
+            dimensions: (i32, i32),
+        ) -> Result<(), display_interface::DisplayError> {
+            center.x %= dimensions.0;
+            center.y %= dimensions.1;
+
+            Line::new(
+                Point::new(center.x - size.width as i32 / 2, center.y),
+                Point::new(center.x + size.width as i32 / 2, center.y),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(fill_color, 1))
+            .draw(display)?;
+
+            Line::new(
+                Point::new(center.x, center.y - size.height as i32 / 2),
+                Point::new(center.x, center.y + size.height as i32 / 2),
+            )
+            .into_styled(PrimitiveStyle::with_stroke(fill_color, 1))
+            .draw(display)
+        }
+
+        fn draw_star<DI: display_interface::WriteOnlyDataCommand>(
+            display: &mut GraphicsMode<DI>,
+            start_type: StarState,
+            center: Point,
+            dimensions: (i32, i32),
+        ) -> Result<(), display_interface::DisplayError> {
+            match start_type {
+                StarState::Point => Rectangle::with_center(center, Size::new(1, 1))
+                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+                    .draw(display),
+                StarState::Small => draw_cross(
+                    display,
+                    center,
+                    Size::new(4, 4),
+                    BinaryColor::On,
+                    dimensions,
+                ),
+                StarState::Big => draw_cross(
+                    display,
+                    center,
+                    Size::new(8, 8),
+                    BinaryColor::On,
+                    dimensions,
+                ),
+                StarState::Outage => {
+                    draw_cross(
+                        display,
+                        center,
+                        Size::new(8, 8),
+                        BinaryColor::On,
+                        dimensions,
+                    )?;
+                    draw_cross(
+                        display,
+                        center,
+                        Size::new(4, 4),
+                        BinaryColor::Off,
+                        dimensions,
+                    )
+                }
+                StarState::Invalid => Ok(()),
+            }
+        }
+
         let (display_w, display_h) = {
             let d = display.get_dimensions();
             (d.0 as i32, d.1 as i32)
         };
 
         if time > start + crate::config::SCREENSAVER_TIMEOUT_MS.millis() {
-            fn draw_cross<DI: display_interface::WriteOnlyDataCommand>(
-                display: &mut GraphicsMode<DI>,
-                mut center: Point,
-                size: Size,
-                fill_color: BinaryColor,
-                dimensions: (i32, i32),
-            ) -> Result<(), display_interface::DisplayError> {
-                center.x %= dimensions.0;
-                center.y %= dimensions.1;
+            let add = Size::new(
+                (display_w as u32 / 2) + (star_base_pos.x % star_base_pos.y) as u32,
+                (display_h as u32 / 2) + (star_base_pos.y % star_base_pos.x) as u32,
+            );
+            let center = Point::new(star_base_pos.x, star_base_pos.y);
+            let state = StarState::from_animation_step(current_animation_step);
+            draw_star(display, state, center, (display_w, display_h))?;
+            draw_star(display, state, center + add, (display_w, display_h))?;
 
-                Line::new(
-                    Point::new(center.x - size.width as i32 / 2, center.y),
-                    Point::new(center.x + size.width as i32 / 2, center.y),
-                )
-                .into_styled(PrimitiveStyle::with_stroke(fill_color, 1))
-                .draw(display)?;
-
-                Line::new(
-                    Point::new(center.x, center.y - size.height as i32 / 2),
-                    Point::new(center.x, center.y + size.height as i32 / 2),
-                )
-                .into_styled(PrimitiveStyle::with_stroke(fill_color, 1))
-                .draw(display)
-            }
-
-            let second_star_base = Point::new(star_base_pos.y, star_base_pos.x);
-            match current_animation_step {
-                0 => {
-                    Rectangle::with_center(
-                        Point::new(star_base_pos.x % display_w, star_base_pos.y % display_h),
-                        Size::new(1, 1),
-                    )
-                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-                    .draw(display)?;
-
-                    draw_cross(
-                        display,
-                        second_star_base,
-                        Size::new(10, 10),
-                        BinaryColor::On,
-                        (display_w, display_h),
-                    )?;
-                    draw_cross(
-                        display,
-                        second_star_base,
-                        Size::new(4, 4),
-                        BinaryColor::Off,
-                        (display_w, display_h),
-                    )?;
-                }
-                1 => {
-                    draw_cross(
-                        display,
-                        *star_base_pos,
-                        Size::new(4, 4),
-                        BinaryColor::On,
-                        (display_w, display_h),
-                    )?;
-
-                    draw_cross(
-                        display,
-                        second_star_base,
-                        Size::new(8, 8),
-                        BinaryColor::On,
-                        (display_w, display_h),
-                    )?;
-                }
-                2 => {
-                    draw_cross(
-                        display,
-                        *star_base_pos,
-                        Size::new(8, 8),
-                        BinaryColor::On,
-                        (display_w, display_h),
-                    )?;
-
-                    draw_cross(
-                        display,
-                        second_star_base,
-                        Size::new(4, 4),
-                        BinaryColor::On,
-                        (display_w, display_h),
-                    )?;
-                }
-                3 => {
-                    draw_cross(
-                        display,
-                        *star_base_pos,
-                        Size::new(10, 10),
-                        BinaryColor::On,
-                        (display_w, display_h),
-                    )?;
-                    draw_cross(
-                        display,
-                        *star_base_pos,
-                        Size::new(4, 4),
-                        BinaryColor::Off,
-                        (display_w, display_h),
-                    )?;
-
-                    Rectangle::with_center(
-                        Point::new(
-                            second_star_base.x % display_w,
-                            second_star_base.y % display_h,
-                        ),
-                        Size::new(1, 1),
-                    )
-                    .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-                    .draw(display)?;
-                }
-                _ => {}
-            }
-
+            let center = Point::new(star_base_pos.y, star_base_pos.x);
+            let state = state.invert();
+            draw_star(display, state, center, (display_w, display_h))?;
+            draw_star(display, state, center + add, (display_w, display_h))?;
             Ok(())
         } else {
             Text::with_text_style(

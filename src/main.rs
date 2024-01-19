@@ -863,7 +863,7 @@ mod app {
             {
                 // HID-I2C
                 let (res, mut buf) = hid_i2c.lock(|hid_i2c| {
-                    let mut buf = [0u8; 64];
+                    let mut buf = [0u8; support::HID_REPORT_SIZE];
                     let res = hid_i2c.pull_raw_output(&mut buf);
                     (res, buf)
                 });

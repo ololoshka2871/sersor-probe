@@ -108,8 +108,10 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         let req_function = buf[1];
 
         if let Some(req) = self.find_request(requester, req_device, req_function) {
-            req.start = now;
-            req.requester |= requester;
+            if !(req.requester & requester) {
+                req.start = now;
+                req.requester |= requester;
+            }
             defmt::trace!("Pushed already existing Modbus request");
             true
         } else {

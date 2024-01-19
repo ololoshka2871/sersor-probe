@@ -80,10 +80,10 @@ macro_rules! process_modbus_dispatcher {
                 $modbus_assembly_buffer.reset();
                 $modbus_buffer_ready = false;
             } else {
-                $device_request.lock(|device_request| match device_request.as_ref() {
+                $device_request.lock(|device_request| match device_request.front() {
                     Some((dr, bus_name)) if bus_name == &$bus_name => {
                         if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
-                            *device_request = None;
+                            device_request.pop_front();
                         }
                     }
                     _ => {}
@@ -104,7 +104,9 @@ macro_rules! process_modbus_dispatcher {
             ) {
                 if requester & bridge::Requester::Device {
                     $device_response.lock(|device_response| {
-                        device_response.replace((resp.clone(), $bus_name));
+                        while device_response.push_back((resp.clone(), $bus_name)).is_err() {
+                            device_response.pop_front();
+                        }
                     });
                 }
                 if requester & bridge::Requester::USB {

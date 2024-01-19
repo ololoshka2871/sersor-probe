@@ -92,8 +92,14 @@ mod app {
         modbus1_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
         modbus2_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
 
-        device_modbus_request: Option<(modbus_core::rtu::RequestAdu<'static>, &'static str)>,
-        device_modbus_response: Option<(alloc::vec::Vec<u8>, &'static str)>,
+        device_modbus_request: heapless::Deque<
+            (modbus_core::rtu::RequestAdu<'static>, &'static str),
+            { config::MODBUS_REQUEST_QUEUE_SIZE },
+        >,
+        device_modbus_response: heapless::Deque<
+            (alloc::vec::Vec<u8>, &'static str),
+            { config::MODBUS_REQUEST_QUEUE_SIZE },
+        >,
     }
 
     #[local]
@@ -366,8 +372,8 @@ mod app {
                 uart1: support::UartHalfDuplex::new(uart1, re_de1),
                 uart2: support::UartHalfDuplex::new(uart2, re_de2),
 
-                device_modbus_request: None,
-                device_modbus_response: None,
+                device_modbus_request: heapless::Deque::new(),
+                device_modbus_response: heapless::Deque::new(),
             },
             Local {
                 i2c_device: None,
@@ -469,6 +475,11 @@ mod app {
             *device = None;
         }
 
+        let mut report_scan = |scan_addr| {
+            display_state
+                .lock(|display_state| display_state.scan(display_state::ScanState::I2C(scan_addr)));
+        };
+
         if let Some(dev) = device {
             // Known device on known address
             if let Some(storage) = i2c.lock(|i2c| {
@@ -478,7 +489,7 @@ mod app {
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
                         defmt::error!("{} @ {} not responding", dev.name(), scan_addr);
-                        scan_addr = 0; // reset
+                        report_scan(0); // reset
                     }
                     None
                 } else {
@@ -495,8 +506,7 @@ mod app {
                 scan_addr = config::I2C_ADDR_MIN;
             }
 
-            display_state
-                .lock(|display_state| display_state.scan(display_state::ScanState::I2C(scan_addr)));
+            report_scan(scan_addr);
 
             i2c.lock(|i2c| {
                 let mut buf = [0u8; 4];
@@ -555,14 +565,7 @@ mod app {
                 pdu: device.build_data_request(),
             };
 
-            tx.lock(|tx| {
-                if tx.is_none() {
-                    tx.replace((req, bus_id));
-                    true
-                } else {
-                    false
-                }
-            })
+            tx.lock(|tx| tx.push_back((req, bus_id)).is_ok())
         };
 
         let mut report_scan = |scan_addr| {
@@ -575,7 +578,7 @@ mod app {
             });
         };
 
-        let rx_data = rx.lock(|rx| rx.take());
+        let rx_data = rx.lock(|rx| rx.pop_front());
 
         if let Some(dev) = device {
             // Known device on known address
@@ -602,6 +605,7 @@ mod app {
             if let Some(storage) = storage {
                 defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
                 display_state.lock(|state| state.display_output(storage));
+                *modbus_error_count = 0;
             } else {
                 *modbus_error_count += 1;
                 if *modbus_error_count >= config::MODBUS_ERROR_MAX_COUNT {
@@ -655,9 +659,7 @@ mod app {
                     };
 
                     tx.lock(|tx| {
-                        if tx.is_none() {
-                            tx.replace((req, bus_id));
-                        } else if scan_addr > 1 {
+                        if tx.push_back((req, bus_id)).is_err() && scan_addr > 1 {
                             scan_addr -= 1;
                         }
                     });

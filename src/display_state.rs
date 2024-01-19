@@ -258,7 +258,8 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
         match &self.state {
             State::CurrentMonitoringScreen { .. }
             | State::DetectingScreen(_)
-            | State::DisconnectScreen { .. } => {
+            | State::DisconnectScreen { .. }
+            | State::OutputDisplayScreen { .. } => {
                 self.state = State::DetectingScreen(state);
             }
             _ => { /* Ignore */ }

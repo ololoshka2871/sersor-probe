@@ -2,6 +2,7 @@
 #![no_std]
 #![feature(macro_metavar_expr)]
 #![feature(linked_list_remove)]
+#![feature(linked_list_cursors)]
 
 pub mod bridge;
 mod config;
@@ -557,6 +558,8 @@ mod app {
         // reset
         if scan_addr == 0 {
             *device = None;
+            rx.lock(|rx| rx.clear());
+            tx.lock(|tx| tx.clear());
         }
 
         let mut try_send_ddata_req = |device: &dyn devices::ModbusDevice| -> bool {

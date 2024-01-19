@@ -1,6 +1,7 @@
 use core::ops::{BitAnd, BitOrAssign};
 
 use alloc::{collections::LinkedList, vec::Vec};
+use byteorder::{BigEndian, ByteOrder};
 use modbus_core::rtu::{ResponseAdu, SlaveId};
 use systick_monotonic::fugit::{TimerDurationU64, TimerInstantU64};
 
@@ -11,9 +12,23 @@ pub enum Requester {
     Both,
 }
 
+impl Requester {
+    pub fn is_both(&self) -> bool {
+        matches!(self, Requester::Both)
+    }
+
+    pub fn discard(&mut self, other: Requester) {
+        match (&self, other) {
+            (Requester::Both, Requester::USB) => *self = Requester::Device,
+            (Requester::Both, Requester::Device) => *self = Requester::USB,
+            _ => panic!(),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub enum RequestState<const FREQ_HZ: u32> {
-    Stored,
+    Stored(u16),
     Tx(usize),
     WaitingForResponse,
     Success {
@@ -45,6 +60,7 @@ impl BitAnd for Requester {
     }
 }
 
+#[derive(Clone)]
 struct Request<const FREQ_HZ: u32> {
     req_data: Vec<u8>,
     requester: Requester,
@@ -72,16 +88,19 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         requester: Requester,
         device: SlaveId,
         function: u8,
+        crc16: u16,
     ) -> Option<&mut Request<FREQ_HZ>> {
         self.pending_requests.iter_mut().find(|req| {
             let req_hdr = req.req_data.as_slice();
             let req_device = req_hdr[0];
             let req_function = req_hdr[1];
             let req_requester = req.requester;
+            let req_crc16 = BigEndian::read_u16(&req_hdr[req_hdr.len() - 2..]);
 
             req_device == device
                 && req_function == function
                 && (req_requester == requester || req_requester == Requester::Both)
+                && req_crc16 == crc16
         })
     }
 
@@ -106,13 +125,14 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
     ) -> bool {
         let req_device = buf[0];
         let req_function = buf[1];
+        let crc16 = BigEndian::read_u16(&buf[buf.len() - 2..]);
 
-        if let Some(req) = self.find_request(requester, req_device, req_function) {
+        if let Some(req) = self.find_request(requester, req_device, req_function, crc16) {
             if !(req.requester & requester) {
                 req.start = now;
                 req.requester |= requester;
             }
-            defmt::trace!("Pushed already existing Modbus request");
+            defmt::trace!("Pushed already existing Modbus request (0x{:X})", crc16);
             true
         } else {
             if self.pending_requests.len() == self.max_size && !self.try_cleanup(now) {
@@ -122,10 +142,10 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
             self.pending_requests.push_back(Request {
                 req_data: buf.to_vec(),
                 requester,
-                state: RequestState::Stored,
+                state: RequestState::Stored(BigEndian::read_u16(&buf[buf.len() - 2..])),
                 start: now,
             });
-            defmt::trace!("Pushed new Modbus request");
+            defmt::trace!("Pushed new Modbus request (0x{:X})", crc16);
 
             true
         }
@@ -154,7 +174,7 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
                 .iter()
                 .fold((0usize, 0usize, 0usize), |mut counters, req| {
                     match &req.state {
-                        RequestState::Stored => {
+                        RequestState::Stored(_) => {
                             counters.0 += 1;
                         }
                         RequestState::Tx(_) => {
@@ -172,7 +192,7 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
 
     pub fn start_tx(&mut self) -> u8 {
         for r in self.pending_requests.iter_mut() {
-            if RequestState::Stored == r.state {
+            if let RequestState::Stored(_) = r.state {
                 r.state = RequestState::Tx(1);
                 return r.req_data[0];
             }
@@ -219,16 +239,43 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         }
     }
 
-    pub fn try_take_resp(&mut self) -> Option<(Requester, Vec<u8>, TimerInstantU64<FREQ_HZ>)> {
-        if let Some(idx) = self
-            .pending_requests
-            .iter()
-            .position(|req| matches!(req.state, RequestState::Success { .. }))
-        {
-            let r = self.pending_requests.remove(idx);
+    pub fn try_take_resp_by_source(
+        &mut self,
+        requester: Requester,
+    ) -> Option<(Vec<u8>, TimerInstantU64<FREQ_HZ>)> {
+        if let Some(idx) = self.pending_requests.iter().position(|req| {
+            (matches!(req.state, RequestState::Success { .. }) && req.requester == requester)
+        }) {
+            let len = self.pending_requests.len();
+
+            let offset_from_end = len - idx - 1;
+            let mut p_element = if idx <= offset_from_end {
+                let mut cursor = self.pending_requests.cursor_front_mut();
+                for _ in 0..idx {
+                    cursor.move_next();
+                }
+                cursor
+            } else {
+                let mut cursor = self.pending_requests.cursor_back_mut();
+                for _ in 0..offset_from_end {
+                    cursor.move_prev();
+                }
+                cursor
+            };
+
+            let r = {
+                let current = p_element.current().unwrap();
+                if current.requester.is_both() {
+                    current.requester.discard(requester);
+                    current.clone()
+                } else {
+                    p_element.remove_current().unwrap()
+                }
+            };
+
             if let RequestState::Success { data, ts } = r.state {
                 defmt::trace!("Took response for request T{}", r.start.ticks());
-                Some((r.requester, data, ts))
+                Some((data, ts))
             } else {
                 None
             }

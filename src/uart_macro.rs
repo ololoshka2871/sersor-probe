@@ -98,21 +98,21 @@ macro_rules! process_modbus_dispatcher {
             }
 
             // try take ready response
-            if let (true, Some((requester, resp, _ts))) = (
+            if let (true, Some((resp, _ts))) = (
                 $modbus_resp_buffer.is_none(),
-                modbus_dispatcher.try_take_resp(),
+                modbus_dispatcher.try_take_resp_by_source(bridge::Requester::USB),
             ) {
-                if requester & bridge::Requester::Device {
-                    $device_response.lock(|device_response| {
-                        while device_response.push_back((resp.clone(), $bus_name)).is_err() {
-                            device_response.pop_front();
-                        }
-                    });
-                }
-                if requester & bridge::Requester::USB {
-                    $modbus_resp_buffer.replace(resp.into());
-                }
+                $modbus_resp_buffer.replace(resp.into());
             }
+
+            $device_response.lock(|device_response| 
+                while let (false, Some((resp, _ts))) = (
+                    device_response.is_full(),
+                    modbus_dispatcher.try_take_resp_by_source(bridge::Requester::Device),
+                ) {
+                    device_response.push_back((resp.clone(), $bus_name)).ok();
+                }
+            );
         });
     };
 }

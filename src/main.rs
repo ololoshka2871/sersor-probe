@@ -602,6 +602,7 @@ mod app {
             if let Some(storage) = storage {
                 defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
                 display_state.lock(|state| state.display_output(storage));
+                *modbus_error_count = 0;
             } else {
                 *modbus_error_count += 1;
                 if *modbus_error_count >= config::MODBUS_ERROR_MAX_COUNT {

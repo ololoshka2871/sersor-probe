@@ -66,7 +66,7 @@ macro_rules! try_read_vcom {
 
 macro_rules! process_modbus_dispatcher {
     (name=$bus_name: expr, modbus_dispatcher=$modbus_dispatcher: expr, uart=$uart: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr,
-        modbus_buffer_ready=$modbus_buffer_ready: expr, modbus_resp_buffer=$modbus_resp_buffer: expr, 
+        modbus_buffer_ready=$modbus_buffer_ready: expr, modbus_resp_buffer=$modbus_resp_buffer: expr,
         device_request=$device_request: expr, device_response=$device_response: expr) => {
         $modbus_dispatcher.lock(|modbus_dispatcher| {
             // try commit request
@@ -80,13 +80,18 @@ macro_rules! process_modbus_dispatcher {
                 $modbus_assembly_buffer.reset();
                 $modbus_buffer_ready = false;
             } else {
-                $device_request.lock(|device_request| match device_request.front() {
-                    Some((dr, bus_name)) if bus_name == &$bus_name => {
-                        if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
+                $device_request.lock(|device_request| {
+                    while let Some((dr, bus_name)) = device_request.front() {
+                        if bus_name == &$bus_name {
+                            if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
+                                device_request.pop_front();
+                            } else {
+                                break;
+                            }
+                        } else {
                             device_request.pop_front();
                         }
                     }
-                    _ => {}
                 });
             }
 
@@ -105,14 +110,14 @@ macro_rules! process_modbus_dispatcher {
                 $modbus_resp_buffer.replace(resp.into());
             }
 
-            $device_response.lock(|device_response| 
+            $device_response.lock(|device_response| {
                 while let (false, Some((resp, _ts))) = (
                     device_response.is_full(),
                     modbus_dispatcher.try_take_resp_by_source(bridge::Requester::Device),
                 ) {
                     device_response.push_back((resp.clone(), $bus_name)).ok();
                 }
-            );
+            });
         });
     };
 }

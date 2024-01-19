@@ -12,6 +12,7 @@ pub trait ValuesStorage: Send {
     fn sender_id(&self) -> String;
     fn print(&self) -> String;
     fn render(&self, field_width: u32) -> Vec<String>;
+    fn as_mut_slice(&mut self) -> &mut [u8];
 }
 
 pub trait Device: Sync {

@@ -78,34 +78,22 @@ impl ModbusDevice for DeviceDba0 {
         }
     }
 
-    fn build_data_request(&self) -> RequestPdu<'static> {
-        modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(
-            0x00,
-            (DATA_SIZE / core::mem::size_of::<u16>()) as u16,
-        ))
+    fn build_data_request_iter(&self) -> Box<dyn Iterator<Item = RequestPdu<'static>>> {
+        Box::new(
+            [
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 8)), // P + T
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x04, 4)), // Fp + Ft
+            ]
+            .into_iter(),
+        )
     }
 
-    fn decode_resp(
+    fn decode_resps(
         &self,
         dest: &mut dyn super::ValuesStorage,
-        resp: ResponseAdu<'_>,
+        resps: &mut dyn Iterator<Item = &(alloc::vec::Vec<u8>, &str)>,
+        bus_id: &'static str,
     ) -> Result<(), DecodeError> {
-        match resp.pdu.0 {
-            Err(e) => Err(DecodeError::ResponseError(e)),
-            Ok(Response::ReadInputRegisters(data)) => {
-                if data.len() == DATA_SIZE / core::mem::size_of::<u16>() {
-                    let mut buf = [0u8; DATA_SIZE];
-                    for (i, w) in data.into_iter().enumerate() {
-                        buf[i * core::mem::size_of::<u16>()..(i + 1) * core::mem::size_of::<u16>()]
-                            .copy_from_slice(&w.to_be_bytes());
-                    }
-                    dest.copy_from(&buf);
-                    Ok(())
-                } else {
-                    Err(DecodeError::InsuficientData)
-                }
-            }
-            _ => Err(DecodeError::InvalidResponseType),
-        }
+        super::read_comon::modbus_resp_to_storage_linear(bus_id, dest, resps)
     }
 }

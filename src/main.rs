@@ -95,11 +95,11 @@ mod app {
 
         device_modbus_request: heapless::Deque<
             (modbus_core::rtu::RequestAdu<'static>, &'static str),
-            { config::MODBUS_REQUEST_QUEUE_SIZE },
+            { config::MODBUS_SELF_INQUARY_QUEUE_SIZE },
         >,
         device_modbus_response: heapless::Deque<
             (alloc::vec::Vec<u8>, &'static str),
-            { config::MODBUS_REQUEST_QUEUE_SIZE },
+            { config::MODBUS_SELF_INQUARY_QUEUE_SIZE },
         >,
     }
 
@@ -562,13 +562,16 @@ mod app {
             tx.lock(|tx| tx.clear());
         }
 
-        let mut try_send_ddata_req = |device: &dyn devices::ModbusDevice| -> bool {
-            let req = modbus_core::rtu::RequestAdu {
-                hdr: modbus_core::rtu::Header { slave: scan_addr },
-                pdu: device.build_data_request(),
-            };
-
-            tx.lock(|tx| tx.push_back((req, bus_id)).is_ok())
+        let mut send_data_reqs = |device: &dyn devices::ModbusDevice| {
+            tx.lock(|tx| {
+                device.build_data_request_iter().for_each(|pdu| {
+                    let req = modbus_core::rtu::RequestAdu {
+                        hdr: modbus_core::rtu::Header { slave: scan_addr },
+                        pdu,
+                    };
+                    tx.push_back((req, bus_id)).unwrap();
+                })
+            });
         };
 
         let mut report_scan = |scan_addr| {
@@ -581,29 +584,27 @@ mod app {
             });
         };
 
-        let rx_data = rx.lock(|rx| rx.pop_front());
-
         if let Some(dev) = device {
             // Known device on known address
-            let storage = match rx_data {
-                Some((data, rx_bus)) if rx_bus == bus_id => {
-                    data.as_slice().try_decode_response().and_then(|resp| {
-                        let mut storage = dev.make_storage();
-                        if let Err(e) = dev.decode_resp(storage.as_mut(), resp) {
-                            defmt::error!(
-                                "{} @ {} error: {}",
-                                dev.name(),
-                                resp.hdr.slave,
-                                defmt::Debug2Format(&e)
-                            );
-                            None
-                        } else {
-                            Some(storage)
-                        }
-                    })
+            let storage = rx.lock(|rx| {
+                if rx.is_empty() {
+                    None
+                } else {
+                    let mut storage = dev.make_storage();
+                    let res = if let Err(e) =
+                        dev.decode_resps(storage.as_mut(), &mut rx.iter(), bus_id)
+                    {
+                        defmt::error!("{} error: {}", dev.name(), defmt::Debug2Format(&e));
+                        None
+                    } else {
+                        Some(storage)
+                    };
+
+                    rx.clear();
+
+                    res
                 }
-                _ => None,
-            };
+            });
 
             if let Some(storage) = storage {
                 defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
@@ -617,58 +618,71 @@ mod app {
                 }
             }
 
-            try_send_ddata_req(*dev);
+            send_data_reqs(*dev);
         } else {
             // Scan for device
-            match rx_data {
-                Some((data, rx_bus)) if rx_bus == bus_id => {
-                    data.as_slice().try_decode_response().map(|resp| {
-                        defmt::info!(
-                            "Scanning {} addr 0x{:X}, something detected!",
-                            bus_id,
-                            resp.hdr.slave
-                        );
+            let detected = loop {
+                if let Some((data, rx_bus)) = rx.lock(|rx| rx.pop_front()) {
+                    if rx_bus == bus_id {
+                        if let Some(true) = data.as_slice().try_decode_response().map(|resp| {
+                            defmt::info!(
+                                "Scanning {} addr 0x{:X}, something detected!",
+                                bus_id,
+                                resp.hdr.slave
+                            );
 
-                        for dev in MODBUS_DEVICES {
-                            if let Err(e) = dev.probe_resp(resp) {
-                                defmt::error!("{} error: {}", dev.name(), defmt::Debug2Format(&e));
-                            } else {
-                                defmt::info!("{} found!", dev.name());
+                            for dev in MODBUS_DEVICES {
+                                if let Err(e) = dev.probe_resp(resp) {
+                                    defmt::error!(
+                                        "{} error: {}",
+                                        dev.name(),
+                                        defmt::Debug2Format(&e)
+                                    );
+                                } else {
+                                    defmt::info!("{} found!", dev.name());
 
-                                device.replace(*dev);
-                                *modbus_error_count = 0;
+                                    device.replace(*dev);
+                                    *modbus_error_count = 0;
 
-                                try_send_ddata_req(*dev);
+                                    send_data_reqs(*dev);
+
+                                    return true;
+                                }
                             }
-                        }
 
-                        if device.is_none() {
-                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr)
+                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr);
+
+                            false
+                        }) {
+                            break true;
                         }
-                    });
-                }
-                _ => {
-                    scan_addr += 1;
-                    if scan_addr > bridge::MODBUS_ADDR_MAX {
-                        scan_addr = 0;
                     }
-
-                    // send scan request read holding register 0
-                    let req = modbus_core::rtu::RequestAdu {
-                        hdr: modbus_core::rtu::Header { slave: scan_addr },
-                        pdu: modbus_core::RequestPdu(modbus_core::Request::ReadHoldingRegisters(
-                            0x00, 0x01,
-                        )),
-                    };
-
-                    tx.lock(|tx| {
-                        if tx.push_back((req, bus_id)).is_err() && scan_addr > 1 {
-                            scan_addr -= 1;
-                        }
-                    });
-
-                    report_scan(scan_addr);
+                } else {
+                    break false;
                 }
+            };
+
+            if !detected {
+                scan_addr += 1;
+                if scan_addr > bridge::MODBUS_ADDR_MAX {
+                    scan_addr = 0;
+                }
+
+                // send scan request read holding register 0
+                let req = modbus_core::rtu::RequestAdu {
+                    hdr: modbus_core::rtu::Header { slave: scan_addr },
+                    pdu: modbus_core::RequestPdu(modbus_core::Request::ReadHoldingRegisters(
+                        0x00, 0x01,
+                    )),
+                };
+
+                tx.lock(|tx| {
+                    if tx.push_back((req, bus_id)).is_err() && scan_addr > 1 {
+                        scan_addr -= 1;
+                    }
+                });
+
+                report_scan(scan_addr);
             }
         }
 

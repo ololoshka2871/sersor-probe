@@ -73,4 +73,13 @@ impl ValuesStorage for PTFpFtstorage {
             format!("Ft={:>w$}", f(self.ft, 1), w = field_width as usize - 3)
         ]
     }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                &mut self.p as *mut f32 as *mut u8,
+                self.size() * core::mem::size_of::<f32>(),
+            )
+        }
+    }
 }

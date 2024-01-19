@@ -101,6 +101,7 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
                 && req_function == function
                 && (req_requester == requester || req_requester == Requester::Both)
                 && req_crc16 == crc16
+                && matches!(req.state, RequestState::Stored(_) | RequestState::Tx(_))
         })
     }
 

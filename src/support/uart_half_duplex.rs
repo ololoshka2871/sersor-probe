@@ -7,7 +7,7 @@ use stm32f1xx_hal::{
 };
 use systick_monotonic::{fugit::TimerInstantU64, ExtU64};
 
-const SWITCH_TX_DELAY_MS: u64 = 20;
+const SWITCH_TX_DELAY_MS: u64 = 5;
 
 #[derive(defmt::Format, Clone, Copy, PartialEq, Eq)]
 pub enum UartHalfDuplexState {
@@ -85,6 +85,10 @@ where
         self.state = state;
 
         Ok(())
+    }
+
+    pub fn reset_tx_delay(&mut self, now: TimerInstantU64<FREQ_HZ>) {
+        self.last_tx_ts = now;
     }
 
     pub fn rx(&mut self) -> Option<&mut Rx<USART>> {

@@ -152,8 +152,10 @@ macro_rules! try_tx_to_vcom {
 macro_rules! uart_interrupt {
     (busname=$name: expr, uart=$uart:expr, modbus_dispatcher=$dispatcher: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr) => {
         $uart.lock(|uart| {
+            let now = monotonics::MonoTimer::now();
             if let Some(rx) = uart.rx_irq() {
                 if let Ok(byte) = rx.read() {
+                    uart.reset_tx_delay(now);
                     if $modbus_assembly_buffer.feed_byte(byte) {
                         if let Some(adu) = $modbus_assembly_buffer.try_decode_response() {
                             defmt::debug!("{}: Valid response!", $name);
@@ -161,7 +163,7 @@ macro_rules! uart_interrupt {
                                 dispatcher.dispatch_response(
                                     $modbus_assembly_buffer.as_slice(),
                                     adu,
-                                    monotonics::MonoTimer::now(),
+                                    now,
                                 )
                             });
                             $modbus_assembly_buffer.reset();
@@ -173,7 +175,7 @@ macro_rules! uart_interrupt {
                 }
             } else {
                 if let Some(tx) = uart.tx_irq() {
-                    let now = monotonics::MonoTimer::now();
+                    
                     match $dispatcher.lock(bridge::ModbusDispatcher::next_tx) {
                         Ok(byte) => {
                             tx.write(byte).ok();

@@ -98,7 +98,9 @@ macro_rules! process_modbus_dispatcher {
             // try start transmit request
             if modbus_dispatcher.ready_tx() {
                 $uart.lock(|uart| {
-                    uart.switch_tx().write(modbus_dispatcher.start_tx()).ok();
+                    if let Ok(tx) = uart.switch_tx(now) {
+                        tx.write(modbus_dispatcher.start_tx()).ok();
+                    };
                 })
             }
 
@@ -115,7 +117,7 @@ macro_rules! process_modbus_dispatcher {
                     device_response.is_full(),
                     modbus_dispatcher.try_take_resp_by_source(bridge::Requester::Device),
                 ) {
-                    device_response.push_back((resp.clone(), $bus_name)).ok();
+                    device_response.push_back((resp, $bus_name)).ok();
                 }
             });
         });
@@ -171,16 +173,17 @@ macro_rules! uart_interrupt {
                 }
             } else {
                 if let Some(tx) = uart.tx_irq() {
+                    let now = monotonics::MonoTimer::now();
                     match $dispatcher.lock(bridge::ModbusDispatcher::next_tx) {
                         Ok(byte) => {
                             tx.write(byte).ok();
                         }
                         Err(Some(ts)) => {
-                            uart.switch_rx();
+                            uart.switch_rx(now);
                             defmt::trace!("{} Tx complete (T{})", $name, ts.ticks());
                         }
                         Err(None) => {
-                            uart.switch_rx();
+                            uart.switch_rx(now);
                         }
                     }
                 }

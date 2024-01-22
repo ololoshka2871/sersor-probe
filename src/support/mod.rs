@@ -16,7 +16,7 @@ mod my_line_codding;
 pub use my_line_codding::MyLineCoding;
 
 mod uart_half_duplex;
-pub use uart_half_duplex::{UartHalfDuplex, UartHalfDuplexState};
+pub use uart_half_duplex::UartHalfDuplex;
 
 mod buf;
 mod rx_buf;

@@ -1,8 +1,6 @@
 #![no_main]
 #![no_std]
 #![feature(macro_metavar_expr)]
-#![feature(linked_list_remove)]
-#![feature(linked_list_cursors)]
 
 pub mod bridge;
 mod config;
@@ -87,11 +85,29 @@ mod app {
         i2c: TsensorI2c,
         display_state: display_state::DisplayState<{ config::SYSTICK_RATE_HZ }>,
 
-        uart1: support::UartHalfDuplex<'A', 8, USART1, (PA9<Alternate>, PA10<Input<PullUp>>)>,
-        uart2: support::UartHalfDuplex<'B', 5, USART3, (PB10<Alternate>, PB11<Input<PullUp>>)>,
+        uart1: support::UartHalfDuplex<
+            'A',
+            8,
+            USART1,
+            (PA9<Alternate>, PA10<Input<PullUp>>),
+            { config::SYSTICK_RATE_HZ },
+        >,
+        uart2: support::UartHalfDuplex<
+            'B',
+            5,
+            USART3,
+            (PB10<Alternate>, PB11<Input<PullUp>>),
+            { config::SYSTICK_RATE_HZ },
+        >,
 
-        modbus1_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
-        modbus2_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
+        modbus1_dispatcher: bridge::ModbusDispatcher<
+            { config::SYSTICK_RATE_HZ },
+            { config::MODBUS_DISPATCHER_QUEUE_SIZE },
+        >,
+        modbus2_dispatcher: bridge::ModbusDispatcher<
+            { config::SYSTICK_RATE_HZ },
+            { config::MODBUS_DISPATCHER_QUEUE_SIZE },
+        >,
 
         device_modbus_request: heapless::Deque<
             (modbus_core::rtu::RequestAdu<'static>, &'static str),
@@ -149,7 +165,7 @@ mod app {
         defmt::info!("DWT...");
 
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
-        defmt::info!("Heap...");
+        defmt::info!("Heap {} bytes...", config::HEAP_SIZE);
 
         let mut flash = ctx.device.FLASH.constrain();
 
@@ -362,12 +378,10 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
-                modbus1_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
-                    config::MODBUS_DISPATCHER_QUEUE_SIZE,
+                modbus1_dispatcher: bridge::ModbusDispatcher::new(
                     config::MODBUS_RESP_TIMEOUT_MS.millis(),
                 ),
-                modbus2_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
-                    config::MODBUS_DISPATCHER_QUEUE_SIZE,
+                modbus2_dispatcher: bridge::ModbusDispatcher::new(
                     config::MODBUS_RESP_TIMEOUT_MS.millis(),
                 ),
                 uart1: support::UartHalfDuplex::new(uart1, re_de1),

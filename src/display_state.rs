@@ -292,7 +292,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             }
             // идет мониторинг, если ток больше crate::config::CURRENT_THRESHOLD_MA, то начинаем сканирование это шины
             State::CurrentMonitoringScreen { .. } => {
-                let mut arr = alloc::vec![
+                let mut arr = [
                     (ScanState::UART(0), current_values[0]),
                     (ScanState::RS485(0), current_values[1]),
                     (ScanState::I2C(0), current_values[2])

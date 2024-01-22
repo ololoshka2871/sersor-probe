@@ -5,6 +5,9 @@ use stm32f1xx_hal::{
     rcc::Clocks,
     serial::{Config, Event, Rx, Tx},
 };
+use systick_monotonic::{fugit::TimerInstantU64, ExtU64};
+
+const SWITCH_TX_DELAY_MS: u64 = 20;
 
 #[derive(defmt::Format, Clone, Copy, PartialEq, Eq)]
 pub enum UartHalfDuplexState {
@@ -12,13 +15,15 @@ pub enum UartHalfDuplexState {
     Tx,
 }
 
-pub struct UartHalfDuplex<const P: char, const N: u8, USART, PINS> {
+pub struct UartHalfDuplex<const P: char, const N: u8, USART, PINS, const FREQ_HZ: u32> {
+    last_tx_ts: TimerInstantU64<FREQ_HZ>,
     state: UartHalfDuplexState,
     re_de: Pin<P, N, Output<PushPull>>,
     uart: stm32f1xx_hal::serial::Serial<USART, PINS>,
 }
 
-impl<const P: char, const N: u8, USART, PINS> UartHalfDuplex<P, N, USART, PINS>
+impl<const P: char, const N: u8, USART, PINS, const FREQ_HZ: u32>
+    UartHalfDuplex<P, N, USART, PINS, FREQ_HZ>
 where
     USART: stm32f1xx_hal::serial::Instance,
 {
@@ -28,6 +33,7 @@ where
     ) -> Self {
         re_de.set_low();
         Self {
+            last_tx_ts: TimerInstantU64::from_ticks(0),
             state: UartHalfDuplexState::Rx,
             re_de,
             uart,
@@ -44,12 +50,17 @@ where
 
         let res = self.uart.reconfigure(config, clocks);
 
-        self.switch_state(self.state);
+        self.switch_state(self.state, self.last_tx_ts + SWITCH_TX_DELAY_MS.millis())
+            .ok();
 
         res
     }
 
-    pub fn switch_state(&mut self, state: UartHalfDuplexState) {
+    pub fn switch_state(
+        &mut self,
+        state: UartHalfDuplexState,
+        now: TimerInstantU64<FREQ_HZ>,
+    ) -> Result<(), ()> {
         match state {
             UartHalfDuplexState::Rx => {
                 self.uart.unlisten(Event::Txe);
@@ -58,14 +69,22 @@ where
 
                 self.re_de.set_low();
                 self.uart.listen(Event::Rxne);
+
+                self.last_tx_ts = now;
             }
             UartHalfDuplexState::Tx => {
+                if self.last_tx_ts + SWITCH_TX_DELAY_MS.millis() > now {
+                    return Err(());
+                }
+
                 self.uart.unlisten(Event::Rxne);
                 self.re_de.set_high();
                 self.uart.listen(Event::Txe);
             }
         }
         self.state = state;
+
+        Ok(())
     }
 
     pub fn rx(&mut self) -> Option<&mut Rx<USART>> {
@@ -100,13 +119,13 @@ where
         }
     }
 
-    pub fn switch_tx(&mut self) -> &mut Tx<USART> {
-        self.switch_state(UartHalfDuplexState::Tx);
-        &mut self.uart.tx
+    pub fn switch_tx(&mut self, now: TimerInstantU64<FREQ_HZ>) -> Result<&mut Tx<USART>, ()> {
+        self.switch_state(UartHalfDuplexState::Tx, now)
+            .map(|_| &mut self.uart.tx)
     }
 
-    pub fn switch_rx(&mut self) -> &mut Rx<USART> {
-        self.switch_state(UartHalfDuplexState::Rx);
+    pub fn switch_rx(&mut self, now: TimerInstantU64<FREQ_HZ>) -> &mut Rx<USART> {
+        self.switch_state(UartHalfDuplexState::Rx, now).ok();
         &mut self.uart.rx
     }
 }

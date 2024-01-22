@@ -1,8 +1,9 @@
 use core::ops::{BitAnd, BitOrAssign};
 
-use alloc::{collections::LinkedList, vec::Vec};
+use alloc::vec::Vec;
 use byteorder::{BigEndian, ByteOrder};
-use modbus_core::rtu::{ResponseAdu, SlaveId};
+use heapless::sorted_linked_list::{self, SortedLinkedList};
+use modbus_core::rtu::ResponseAdu;
 use systick_monotonic::fugit::{TimerDurationU64, TimerInstantU64};
 
 #[derive(Debug, defmt::Format, Clone, Copy, PartialEq)]
@@ -68,50 +69,50 @@ struct Request<const FREQ_HZ: u32> {
     start: TimerInstantU64<FREQ_HZ>,
 }
 
-pub struct ModbusDispatcher<const FREQ_HZ: u32> {
-    pending_requests: LinkedList<Request<FREQ_HZ>>,
-    max_size: usize,
+impl<const FREQ_HZ: u32> Ord for Request<FREQ_HZ> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.start.cmp(&other.start)
+    }
+}
+
+impl<const FREQ_HZ: u32> PartialOrd for Request<FREQ_HZ> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<const FREQ_HZ: u32> Eq for Request<FREQ_HZ> {}
+
+impl<const FREQ_HZ: u32> PartialEq for Request<FREQ_HZ> {
+    fn eq(&self, other: &Self) -> bool {
+        self.start == other.start
+    }
+}
+
+pub struct ModbusDispatcher<const FREQ_HZ: u32, const MAX_SIZE: usize> {
+    pending_requests: SortedLinkedList<
+        Request<FREQ_HZ>,
+        sorted_linked_list::LinkedIndexU8,
+        sorted_linked_list::Max,
+        MAX_SIZE,
+    >,
     timeout: TimerDurationU64<FREQ_HZ>,
 }
 
-impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
-    pub fn new(max_size: usize, timeout: TimerDurationU64<FREQ_HZ>) -> Self {
+impl<const FREQ_HZ: u32, const MAX_SIZE: usize> ModbusDispatcher<FREQ_HZ, MAX_SIZE> {
+    pub fn new(timeout: TimerDurationU64<FREQ_HZ>) -> Self {
         Self {
-            pending_requests: LinkedList::new(),
-            max_size,
+            pending_requests: SortedLinkedList::new_u8(),
             timeout,
         }
     }
 
-    fn find_request(
-        &mut self,
-        requester: Requester,
-        device: SlaveId,
-        function: u8,
-        crc16: u16,
-    ) -> Option<&mut Request<FREQ_HZ>> {
-        self.pending_requests.iter_mut().find(|req| {
-            let req_hdr = req.req_data.as_slice();
-            let req_device = req_hdr[0];
-            let req_function = req_hdr[1];
-            let req_requester = req.requester;
-            let req_crc16 = BigEndian::read_u16(&req_hdr[req_hdr.len() - 2..]);
-
-            req_device == device
-                && req_function == function
-                && (req_requester == requester || req_requester == Requester::Both)
-                && req_crc16 == crc16
-                && matches!(req.state, RequestState::Stored(_) | RequestState::Tx(_))
-        })
-    }
-
     fn try_cleanup(&mut self, now: TimerInstantU64<FREQ_HZ>) -> bool {
-        if let Some(idx) = self
+        if let Some(r) = self
             .pending_requests
-            .iter()
-            .position(|req| req.start + self.timeout < now)
+            .find_mut(|req| req.start + self.timeout < now)
         {
-            self.pending_requests.remove(idx);
+            r.pop();
             true
         } else {
             false
@@ -124,31 +125,48 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         requester: Requester,
         now: TimerInstantU64<FREQ_HZ>,
     ) -> bool {
-        let req_device = buf[0];
-        let req_function = buf[1];
-        let crc16 = BigEndian::read_u16(&buf[buf.len() - 2..]);
+        let device = buf[0];
+        let function = buf[1];
+        let crc16 = crc(&buf);
 
-        if let Some(req) = self.find_request(requester, req_device, req_function, crc16) {
+        if let Some(mut req) = self.pending_requests.find_mut(move |req| {
+            let req_hdr = req.req_data.as_slice();
+            let req_device = req_hdr[0];
+            let req_function = req_hdr[1];
+            let req_requester = req.requester;
+            let req_crc16 = crc(&req_hdr);
+
+            req_device == device
+                && req_function == function
+                && (req_requester == requester || req_requester == Requester::Both)
+                && req_crc16 == crc16
+                && matches!(req.state, RequestState::Stored(_) | RequestState::Tx(_))
+        }) {
             if !(req.requester & requester) {
                 req.start = now;
                 req.requester |= requester;
             }
             defmt::trace!("Pushed already existing Modbus request (0x{:X})", crc16);
-            true
-        } else {
-            if self.pending_requests.len() == self.max_size && !self.try_cleanup(now) {
+            req.finish();
+            return true;
+        }
+
+        {
+            if self.pending_requests.is_full() && !self.try_cleanup(now) {
                 return false;
             }
 
-            self.pending_requests.push_back(Request {
-                req_data: buf.to_vec(),
-                requester,
-                state: RequestState::Stored(BigEndian::read_u16(&buf[buf.len() - 2..])),
-                start: now,
-            });
+            self.pending_requests
+                .push(Request {
+                    req_data: buf.to_vec(),
+                    requester,
+                    state: RequestState::Stored(BigEndian::read_u16(&buf[buf.len() - 2..])),
+                    start: now,
+                })
+                .ok();
             defmt::trace!("Pushed new Modbus request (0x{:X})", crc16);
 
-            true
+            return true;
         }
     }
 
@@ -192,26 +210,34 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
     }
 
     pub fn start_tx(&mut self) -> u8 {
-        for r in self.pending_requests.iter_mut() {
-            if let RequestState::Stored(_) = r.state {
-                r.state = RequestState::Tx(1);
-                return r.req_data[0];
-            }
+        if let Some(mut r) = self
+            .pending_requests
+            .find_mut(|r| matches!(r.state, RequestState::Stored(_)))
+        {
+            r.state = RequestState::Tx(1);
+            return r.req_data[0];
         }
         panic!()
     }
 
     pub fn next_tx(&mut self) -> Result<u8, Option<TimerInstantU64<FREQ_HZ>>> {
-        for r in self.pending_requests.iter_mut() {
-            if let RequestState::Tx(offset) = r.state {
+        if let Some(mut r) = self.pending_requests.find_mut(|r| match r.state {
+            RequestState::Tx(n) if n > 0 => true,
+            _ => false,
+        }) {
+            let ret = if let RequestState::Tx(offset) = r.state {
                 if offset < r.req_data.len() {
                     r.state = RequestState::Tx(offset + 1);
-                    return Ok(r.req_data[offset]);
+                    Ok(r.req_data[offset])
                 } else {
                     r.state = RequestState::WaitingForResponse;
-                    return Err(Some(r.start));
+                    Err(Some(r.start))
                 }
-            }
+            } else {
+                Err(None)
+            };
+            r.finish();
+            return ret;
         }
         Err(None)
     }
@@ -222,21 +248,20 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         adu: ResponseAdu<'r>,
         now: TimerInstantU64<FREQ_HZ>,
     ) {
-        for r in self.pending_requests.iter_mut() {
-            if (r.state == RequestState::WaitingForResponse)
+        if let Some(mut r) = self.pending_requests.find_mut(|r| {
+            matches!(r.state, RequestState::WaitingForResponse)
                 && (r.req_data[0] == adu.hdr.slave)
                 && (r.req_data[1] == data[1] & 0x7F)
-            {
-                if r.start + self.timeout > now {
-                    r.state = RequestState::Success {
-                        data: data.to_vec(),
-                        ts: now,
-                    };
-                } else {
-                    defmt::error!("Request {} timeouted", r.start.ticks());
-                }
-                return;
+        }) {
+            if r.start + self.timeout > now {
+                r.state = RequestState::Success {
+                    data: data.to_vec(),
+                    ts: now,
+                };
+            } else {
+                defmt::error!("Request {} timeouted", r.start.ticks());
             }
+            r.finish();
         }
     }
 
@@ -244,35 +269,10 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
         &mut self,
         requester: Requester,
     ) -> Option<(Vec<u8>, TimerInstantU64<FREQ_HZ>)> {
-        if let Some(idx) = self.pending_requests.iter().position(|req| {
+        if let Some(r) = self.pending_requests.find_mut(|req| {
             (matches!(req.state, RequestState::Success { .. }) && req.requester == requester)
         }) {
-            let len = self.pending_requests.len();
-
-            let offset_from_end = len - idx - 1;
-            let mut p_element = if idx <= offset_from_end {
-                let mut cursor = self.pending_requests.cursor_front_mut();
-                for _ in 0..idx {
-                    cursor.move_next();
-                }
-                cursor
-            } else {
-                let mut cursor = self.pending_requests.cursor_back_mut();
-                for _ in 0..offset_from_end {
-                    cursor.move_prev();
-                }
-                cursor
-            };
-
-            let r = {
-                let current = p_element.current().unwrap();
-                if current.requester.is_both() {
-                    current.requester.discard(requester);
-                    current.clone()
-                } else {
-                    p_element.remove_current().unwrap()
-                }
-            };
+            let r = r.pop();
 
             if let RequestState::Success { data, ts } = r.state {
                 defmt::trace!("Took response for request T{}", r.start.ticks());
@@ -284,4 +284,8 @@ impl<const FREQ_HZ: u32> ModbusDispatcher<FREQ_HZ> {
             None
         }
     }
+}
+
+fn crc(buf: &[u8]) -> u16 {
+    BigEndian::read_u16(&buf[buf.len() - 2..])
 }

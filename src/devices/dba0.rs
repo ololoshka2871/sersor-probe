@@ -81,7 +81,7 @@ impl ModbusDevice for DeviceDba0 {
     fn build_data_request_iter(&self) -> Box<dyn Iterator<Item = RequestPdu<'static>>> {
         Box::new(
             [
-                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 8)), // P + T
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 4)), // P + T
                 modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x04, 4)), // Fp + Ft
             ]
             .into_iter(),

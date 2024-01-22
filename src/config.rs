@@ -55,4 +55,4 @@ pub const MODBUS_SELF_INQUARY_QUEUE_SIZE: usize = MODBUS_DISPATCHER_QUEUE_SIZE -
 
 //-----------------------------------------------------------------------------
 
-pub const HEAP_SIZE: usize = 8192;
+pub const HEAP_SIZE: usize = 2048;

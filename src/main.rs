@@ -1,7 +1,6 @@
 #![no_main]
 #![no_std]
 #![feature(macro_metavar_expr)]
-#![feature(linked_list_remove)]
 
 pub mod bridge;
 mod config;
@@ -86,14 +85,38 @@ mod app {
         i2c: TsensorI2c,
         display_state: display_state::DisplayState<{ config::SYSTICK_RATE_HZ }>,
 
-        uart1: support::UartHalfDuplex<'A', 8, USART1, (PA9<Alternate>, PA10<Input<PullUp>>)>,
-        uart2: support::UartHalfDuplex<'B', 5, USART3, (PB10<Alternate>, PB11<Input<PullUp>>)>,
+        uart1: support::UartHalfDuplex<
+            'A',
+            8,
+            USART1,
+            (PA9<Alternate>, PA10<Input<PullUp>>),
+            { config::SYSTICK_RATE_HZ },
+        >,
+        uart2: support::UartHalfDuplex<
+            'B',
+            5,
+            USART3,
+            (PB10<Alternate>, PB11<Input<PullUp>>),
+            { config::SYSTICK_RATE_HZ },
+        >,
 
-        modbus1_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
-        modbus2_dispatcher: bridge::ModbusDispatcher<{ config::SYSTICK_RATE_HZ }>,
+        modbus1_dispatcher: bridge::ModbusDispatcher<
+            { config::SYSTICK_RATE_HZ },
+            { config::MODBUS_DISPATCHER_QUEUE_SIZE },
+        >,
+        modbus2_dispatcher: bridge::ModbusDispatcher<
+            { config::SYSTICK_RATE_HZ },
+            { config::MODBUS_DISPATCHER_QUEUE_SIZE },
+        >,
 
-        device_modbus_request: Option<(modbus_core::rtu::RequestAdu<'static>, &'static str)>,
-        device_modbus_response: Option<(alloc::vec::Vec<u8>, &'static str)>,
+        device_modbus_request: heapless::Deque<
+            (modbus_core::rtu::RequestAdu<'static>, &'static str),
+            { config::MODBUS_SELF_INQUARY_QUEUE_SIZE },
+        >,
+        device_modbus_response: heapless::Deque<
+            (alloc::vec::Vec<u8>, &'static str),
+            { config::MODBUS_SELF_INQUARY_QUEUE_SIZE },
+        >,
     }
 
     #[local]
@@ -142,7 +165,7 @@ mod app {
         defmt::info!("DWT...");
 
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
-        defmt::info!("Heap...");
+        defmt::info!("Heap {} bytes...", config::HEAP_SIZE);
 
         let mut flash = ctx.device.FLASH.constrain();
 
@@ -355,19 +378,17 @@ mod app {
                 hid_i2c,
                 i2c: i2c_wraper,
                 display_state: display_state::DisplayState::init(mono.now() + 3_500.millis()), // 3_500.millis()
-                modbus1_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
-                    config::MODBUS_DISPATCHER_QUEUE_SIZE,
+                modbus1_dispatcher: bridge::ModbusDispatcher::new(
                     config::MODBUS_RESP_TIMEOUT_MS.millis(),
                 ),
-                modbus2_dispatcher: bridge::ModbusDispatcher::<{ config::SYSTICK_RATE_HZ }>::new(
-                    config::MODBUS_DISPATCHER_QUEUE_SIZE,
+                modbus2_dispatcher: bridge::ModbusDispatcher::new(
                     config::MODBUS_RESP_TIMEOUT_MS.millis(),
                 ),
                 uart1: support::UartHalfDuplex::new(uart1, re_de1),
                 uart2: support::UartHalfDuplex::new(uart2, re_de2),
 
-                device_modbus_request: None,
-                device_modbus_response: None,
+                device_modbus_request: heapless::Deque::new(),
+                device_modbus_response: heapless::Deque::new(),
             },
             Local {
                 i2c_device: None,
@@ -469,6 +490,11 @@ mod app {
             *device = None;
         }
 
+        let mut report_scan = |scan_addr| {
+            display_state
+                .lock(|display_state| display_state.scan(display_state::ScanState::I2C(scan_addr)));
+        };
+
         if let Some(dev) = device {
             // Known device on known address
             if let Some(storage) = i2c.lock(|i2c| {
@@ -478,7 +504,7 @@ mod app {
                     *i2c_error_count += 1;
                     if *i2c_error_count >= config::I2C_ERROR_MAX_COUNT {
                         defmt::error!("{} @ {} not responding", dev.name(), scan_addr);
-                        scan_addr = 0; // reset
+                        report_scan(0); // reset
                     }
                     None
                 } else {
@@ -495,8 +521,7 @@ mod app {
                 scan_addr = config::I2C_ADDR_MIN;
             }
 
-            display_state
-                .lock(|display_state| display_state.scan(display_state::ScanState::I2C(scan_addr)));
+            report_scan(scan_addr);
 
             i2c.lock(|i2c| {
                 let mut buf = [0u8; 4];
@@ -547,22 +572,20 @@ mod app {
         // reset
         if scan_addr == 0 {
             *device = None;
+            rx.lock(|rx| rx.clear());
+            tx.lock(|tx| tx.clear());
         }
 
-        let mut try_send_ddata_req = |device: &dyn devices::ModbusDevice| -> bool {
-            let req = modbus_core::rtu::RequestAdu {
-                hdr: modbus_core::rtu::Header { slave: scan_addr },
-                pdu: device.build_data_request(),
-            };
-
+        let mut send_data_reqs = |device: &dyn devices::ModbusDevice| {
             tx.lock(|tx| {
-                if tx.is_none() {
-                    tx.replace((req, bus_id));
-                    true
-                } else {
-                    false
-                }
-            })
+                device.build_data_request_iter().for_each(|pdu| {
+                    let req = modbus_core::rtu::RequestAdu {
+                        hdr: modbus_core::rtu::Header { slave: scan_addr },
+                        pdu,
+                    };
+                    tx.push_back((req, bus_id)).unwrap();
+                })
+            });
         };
 
         let mut report_scan = |scan_addr| {
@@ -575,29 +598,27 @@ mod app {
             });
         };
 
-        let rx_data = rx.lock(|rx| rx.take());
-
         if let Some(dev) = device {
             // Known device on known address
-            let storage = match rx_data {
-                Some((data, rx_bus)) if rx_bus == bus_id => {
-                    data.as_slice().try_decode_response().and_then(|resp| {
-                        let mut storage = dev.make_storage();
-                        if let Err(e) = dev.decode_resp(storage.as_mut(), resp) {
-                            defmt::error!(
-                                "{} @ {} error: {}",
-                                dev.name(),
-                                resp.hdr.slave,
-                                defmt::Debug2Format(&e)
-                            );
-                            None
-                        } else {
-                            Some(storage)
-                        }
-                    })
+            let storage = rx.lock(|rx| {
+                if rx.is_empty() {
+                    None
+                } else {
+                    let mut storage = dev.make_storage();
+                    let res = if let Err(e) =
+                        dev.decode_resps(storage.as_mut(), &mut rx.iter(), bus_id)
+                    {
+                        defmt::error!("{} error: {}", dev.name(), defmt::Debug2Format(&e));
+                        None
+                    } else {
+                        Some(storage)
+                    };
+
+                    rx.clear();
+
+                    res
                 }
-                _ => None,
-            };
+            });
 
             if let Some(storage) = storage {
                 defmt::debug!("{}: {}", dev.name(), storage.print().as_str());
@@ -611,60 +632,71 @@ mod app {
                 }
             }
 
-            try_send_ddata_req(*dev);
+            send_data_reqs(*dev);
         } else {
             // Scan for device
-            match rx_data {
-                Some((data, rx_bus)) if rx_bus == bus_id => {
-                    data.as_slice().try_decode_response().map(|resp| {
-                        defmt::info!(
-                            "Scanning {} addr 0x{:X}, something detected!",
-                            bus_id,
-                            resp.hdr.slave
-                        );
+            let detected = loop {
+                if let Some((data, rx_bus)) = rx.lock(|rx| rx.pop_front()) {
+                    if rx_bus == bus_id {
+                        if let Some(true) = data.as_slice().try_decode_response().map(|resp| {
+                            defmt::info!(
+                                "Scanning {} addr 0x{:X}, something detected!",
+                                bus_id,
+                                resp.hdr.slave
+                            );
 
-                        for dev in MODBUS_DEVICES {
-                            if let Err(e) = dev.probe_resp(resp) {
-                                defmt::error!("{} error: {}", dev.name(), defmt::Debug2Format(&e));
-                            } else {
-                                defmt::info!("{} found!", dev.name());
+                            for dev in MODBUS_DEVICES {
+                                if let Err(e) = dev.probe_resp(resp) {
+                                    defmt::error!(
+                                        "{} error: {}",
+                                        dev.name(),
+                                        defmt::Debug2Format(&e)
+                                    );
+                                } else {
+                                    defmt::info!("{} found!", dev.name());
 
-                                device.replace(*dev);
-                                *modbus_error_count = 0;
+                                    device.replace(*dev);
+                                    *modbus_error_count = 0;
 
-                                try_send_ddata_req(*dev);
+                                    send_data_reqs(*dev);
+
+                                    return true;
+                                }
                             }
-                        }
 
-                        if device.is_none() {
-                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr)
+                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr);
+
+                            false
+                        }) {
+                            break true;
                         }
-                    });
-                }
-                _ => {
-                    scan_addr += 1;
-                    if scan_addr > bridge::MODBUS_ADDR_MAX {
-                        scan_addr = 0;
                     }
-
-                    // send scan request read holding register 0
-                    let req = modbus_core::rtu::RequestAdu {
-                        hdr: modbus_core::rtu::Header { slave: scan_addr },
-                        pdu: modbus_core::RequestPdu(modbus_core::Request::ReadHoldingRegisters(
-                            0x00, 0x01,
-                        )),
-                    };
-
-                    tx.lock(|tx| {
-                        if tx.is_none() {
-                            tx.replace((req, bus_id));
-                        } else if scan_addr > 1 {
-                            scan_addr -= 1;
-                        }
-                    });
-
-                    report_scan(scan_addr);
+                } else {
+                    break false;
                 }
+            };
+
+            if !detected {
+                scan_addr += 1;
+                if scan_addr > bridge::MODBUS_ADDR_MAX {
+                    scan_addr = 0;
+                }
+
+                // send scan request read holding register 0
+                let req = modbus_core::rtu::RequestAdu {
+                    hdr: modbus_core::rtu::Header { slave: scan_addr },
+                    pdu: modbus_core::RequestPdu(modbus_core::Request::ReadHoldingRegisters(
+                        0x00, 0x01,
+                    )),
+                };
+
+                tx.lock(|tx| {
+                    if tx.push_back((req, bus_id)).is_err() && scan_addr > 1 {
+                        scan_addr -= 1;
+                    }
+                });
+
+                report_scan(scan_addr);
             }
         }
 

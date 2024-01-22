@@ -66,7 +66,7 @@ macro_rules! try_read_vcom {
 
 macro_rules! process_modbus_dispatcher {
     (name=$bus_name: expr, modbus_dispatcher=$modbus_dispatcher: expr, uart=$uart: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr,
-        modbus_buffer_ready=$modbus_buffer_ready: expr, modbus_resp_buffer=$modbus_resp_buffer: expr, 
+        modbus_buffer_ready=$modbus_buffer_ready: expr, modbus_resp_buffer=$modbus_resp_buffer: expr,
         device_request=$device_request: expr, device_response=$device_response: expr) => {
         $modbus_dispatcher.lock(|modbus_dispatcher| {
             // try commit request
@@ -80,37 +80,46 @@ macro_rules! process_modbus_dispatcher {
                 $modbus_assembly_buffer.reset();
                 $modbus_buffer_ready = false;
             } else {
-                $device_request.lock(|device_request| match device_request.as_ref() {
-                    Some((dr, bus_name)) if bus_name == &$bus_name => {
-                        if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
-                            *device_request = None;
+                $device_request.lock(|device_request| {
+                    while let Some((dr, bus_name)) = device_request.front() {
+                        if bus_name == &$bus_name {
+                            if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
+                                device_request.pop_front();
+                            } else {
+                                break;
+                            }
+                        } else {
+                            device_request.pop_front();
                         }
                     }
-                    _ => {}
                 });
             }
 
             // try start transmit request
             if modbus_dispatcher.ready_tx() {
                 $uart.lock(|uart| {
-                    uart.switch_tx().write(modbus_dispatcher.start_tx()).ok();
+                    if let Ok(tx) = uart.switch_tx(now) {
+                        tx.write(modbus_dispatcher.start_tx()).ok();
+                    };
                 })
             }
 
             // try take ready response
-            if let (true, Some((requester, resp, _ts))) = (
+            if let (true, Some((resp, _ts))) = (
                 $modbus_resp_buffer.is_none(),
-                modbus_dispatcher.try_take_resp(),
+                modbus_dispatcher.try_take_resp_by_source(bridge::Requester::USB),
             ) {
-                if requester & bridge::Requester::Device {
-                    $device_response.lock(|device_response| {
-                        device_response.replace((resp.clone(), $bus_name));
-                    });
-                }
-                if requester & bridge::Requester::USB {
-                    $modbus_resp_buffer.replace(resp.into());
-                }
+                $modbus_resp_buffer.replace(resp.into());
             }
+
+            $device_response.lock(|device_response| {
+                while let (false, Some((resp, _ts))) = (
+                    device_response.is_full(),
+                    modbus_dispatcher.try_take_resp_by_source(bridge::Requester::Device),
+                ) {
+                    device_response.push_back((resp, $bus_name)).ok();
+                }
+            });
         });
     };
 }
@@ -143,8 +152,10 @@ macro_rules! try_tx_to_vcom {
 macro_rules! uart_interrupt {
     (busname=$name: expr, uart=$uart:expr, modbus_dispatcher=$dispatcher: expr, modbus_assembly_buffer=$modbus_assembly_buffer: expr) => {
         $uart.lock(|uart| {
+            let now = monotonics::MonoTimer::now();
             if let Some(rx) = uart.rx_irq() {
                 if let Ok(byte) = rx.read() {
+                    uart.reset_tx_delay(now);
                     if $modbus_assembly_buffer.feed_byte(byte) {
                         if let Some(adu) = $modbus_assembly_buffer.try_decode_response() {
                             defmt::debug!("{}: Valid response!", $name);
@@ -152,7 +163,7 @@ macro_rules! uart_interrupt {
                                 dispatcher.dispatch_response(
                                     $modbus_assembly_buffer.as_slice(),
                                     adu,
-                                    monotonics::MonoTimer::now(),
+                                    now,
                                 )
                             });
                             $modbus_assembly_buffer.reset();
@@ -164,16 +175,17 @@ macro_rules! uart_interrupt {
                 }
             } else {
                 if let Some(tx) = uart.tx_irq() {
+                    
                     match $dispatcher.lock(bridge::ModbusDispatcher::next_tx) {
                         Ok(byte) => {
                             tx.write(byte).ok();
                         }
                         Err(Some(ts)) => {
-                            uart.switch_rx();
+                            uart.switch_rx(now);
                             defmt::trace!("{} Tx complete (T{})", $name, ts.ticks());
                         }
                         Err(None) => {
-                            uart.switch_rx();
+                            uart.switch_rx(now);
                         }
                     }
                 }

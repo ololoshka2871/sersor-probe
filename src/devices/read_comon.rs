@@ -1,8 +1,10 @@
+use alloc::vec::Vec;
 use embedded_hal::blocking::i2c::{Read, Write};
+use modbus_core::Response;
 
-use crate::bridge::{Builder, Execute, I2CBridgeError, MyI2COperation};
+use crate::bridge::{Builder, Execute, I2CBridgeError, MyI2COperation, RxBuffer};
 
-use super::{I2CAddress, ValuesStorage};
+use super::{DecodeError, I2CAddress, ValuesStorage};
 
 const DATA_REG_LEGACY_I2C: u8 = 0x00;
 
@@ -26,4 +28,44 @@ where
 
     dest.copy_from(&resp[2..2 + dest.size()]);
     Ok(())
+}
+
+pub fn modbus_resp_to_storage_linear(
+    bus_id: &'static str,
+    dest: &mut dyn super::ValuesStorage,
+    resps: &mut dyn Iterator<Item = &(Vec<u8>, &str)>,
+) -> Result<(), DecodeError> {
+    let buf = dest.as_mut_slice();
+    let mut offset = 0usize;
+
+    while let Some((resp, bus)) = resps.next() {
+        if bus != &bus_id {
+            return Err(DecodeError::InvalidDeviceId);
+        }
+
+        if let Some(resp) = resp.as_slice().try_decode_response() {
+            match resp.pdu.0 {
+                Err(e) => return Err(DecodeError::ResponseError(e)),
+                Ok(Response::ReadInputRegisters(data)) => {
+                    for word in data.into_iter() {
+                        if offset + core::mem::size_of::<u16>() > buf.len() {
+                            return Err(DecodeError::InsuficientData);
+                        }
+                        buf[offset..offset + core::mem::size_of::<u16>()]
+                            .copy_from_slice(&word.to_be_bytes());
+                        offset += core::mem::size_of::<u16>();
+                    }
+                }
+                _ => return Err(DecodeError::InvalidResponseType),
+            }
+        } else {
+            return Err(DecodeError::DecodeFailed);
+        }
+    }
+
+    if offset != buf.len() {
+        Err(DecodeError::InsuficientData)
+    } else {
+        Ok(())
+    }
 }

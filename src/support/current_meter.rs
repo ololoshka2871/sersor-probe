@@ -144,7 +144,12 @@ where
         if let Some(ina219) = &mut self.ina219 {
             let mut result = [0f32; N];
             for (i, address) in self.address.iter().enumerate() {
-                result[i] = lsb * ina219.current(*address)? as f32;
+                let current = ina219.current(*address);
+                result[i] = if let Ok(current) = current {
+                    lsb * current as f32
+                } else {
+                    f32::NAN
+                };
             }
             Ok(result)
         } else {

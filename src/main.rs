@@ -137,8 +137,8 @@ mod app {
         >,
 
         current_meter: support::CurrentMeter<
-            I2C2,
-            (PB10<Alternate<OpenDrain>>, PB11<Alternate<OpenDrain>>),
+            I2C1,                                                   //I2C2,
+            (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>), //(PB10<Alternate<OpenDrain>>, PB11<Alternate<OpenDrain>>),
             3,
         >,
         clocks: stm32f1xx_hal::rcc::Clocks,
@@ -274,7 +274,34 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let i2c_wraper = hw::I2cWraper::i2c1(
+        let i2c_wraper = hw::I2cWraper::new_sim(
+            /* FIXME
+            hw::I2cWraper::i2c1(
+            ctx.device.I2C1,
+            (
+                gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
+                gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
+            ),
+            &mut afio.mapr,
+            */
+            clocks,
+            hw::Mode::Standard {
+                frequency: Hertz::kHz(100),
+            },
+        );
+
+        defmt::info!("I2C sensor port");
+
+        //---------------------------------------------------------------------
+
+        let ina219_i2c = hw::I2cWraper::i2c1(
+            /* FIXME
+            ctx.device.I2C2,
+            (
+                gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
+                gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
+            ),
+            */
             ctx.device.I2C1,
             (
                 gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
@@ -287,27 +314,9 @@ mod app {
             },
         );
 
-        defmt::info!("I2C sensor port");
-
-        //---------------------------------------------------------------------
-
-        /*
-        let ina219_i2c = hw::I2cWraper::i2c2(
-            ctx.device.I2C2,
-            (
-                gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
-                gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
-            ),
-            clocks,
-            hw::Mode::Fast {
-                frequency: Hertz::kHz(100),
-                duty_cycle: hw::DutyCycle::Ratio2to1,
-            },
-        );
-
         let mut current_meter = support::CurrentMeter::new(ina219_i2c, [0x40, 0x41, 0x42]);
-        */
-        let mut current_meter = support::CurrentMeter::new_sim([0x40, 0x41, 0x42]);
+
+        //let mut current_meter = support::CurrentMeter::new_sim([0x40, 0x41, 0x42]);
 
         const CAL_VAL: f32 = 0.04096 / (config::LSB * config::R_SUNT_OM);
         static_assertions::const_assert!(CAL_VAL < u16::MAX as f32);
@@ -725,8 +734,10 @@ mod app {
         let mut display_state = ctx.shared.display_state;
         let current_meter = ctx.local.current_meter;
 
-        let current_values = if let Ok(current) = current_meter.current(config::LSB) {
-            defmt::info!("Current: {}", current);
+        let current_values = if let Ok(mut current) = current_meter.current(config::LSB) {
+            current.iter_mut().for_each(|v| *v *= 1000f32);
+
+            defmt::info!("Current: {} mA", current);
 
             display_state::CurrentValues::from(current)
         } else {
@@ -739,7 +750,7 @@ mod app {
                 ((fi / 10010.1 + 2.1).sin() * 6f32).max(-0.1),
             ];
 
-            defmt::error!("Current read error, simulate: {}", values);
+            defmt::error!("Current read error, simulate: {} mA", values);
 
             display_state::CurrentValues::from(values)
         };

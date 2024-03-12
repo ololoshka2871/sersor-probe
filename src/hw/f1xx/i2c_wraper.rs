@@ -10,7 +10,7 @@ use stm32f1xx_hal::pac::{I2C1, I2C2};
 use stm32f1xx_hal::{afio::MAPR, rcc::Clocks};
 
 pub struct I2cWraper<I2C, PINS> {
-    i2c: BlockingI2c<I2C, PINS>,
+    i2c: Option<BlockingI2c<I2C, PINS>>,
     clocks: Clocks,
     mode: Mode,
 }
@@ -37,7 +37,19 @@ where
             DATA_TIMEOUT_US,
         );
 
-        Self { i2c, clocks, mode }
+        Self {
+            i2c: Some(i2c),
+            clocks,
+            mode,
+        }
+    }
+
+    pub fn new_sim(clocks: Clocks, mode: Mode) -> Self {
+        Self {
+            i2c: None,
+            clocks,
+            mode,
+        }
     }
 }
 
@@ -57,7 +69,11 @@ where
             DATA_TIMEOUT_US,
         );
 
-        Self { i2c, clocks, mode }
+        Self {
+            i2c: Some(i2c),
+            clocks,
+            mode,
+        }
     }
 }
 
@@ -69,7 +85,11 @@ where
     type Error = Error;
 
     fn read(&mut self, addr: u8, buffer: &mut [u8]) -> Result<(), Self::Error> {
-        self.i2c.read(addr, buffer)
+        if let Some(i2c) = &mut self.i2c {
+            i2c.read(addr, buffer)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -81,7 +101,11 @@ where
     type Error = Error;
 
     fn write(&mut self, addr: u8, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.i2c.write(addr, bytes)
+        if let Some(i2c) = &mut self.i2c {
+            i2c.write(addr, bytes)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -118,21 +142,18 @@ where
     I2C: stm32f1xx_hal::i2c::Instance,
 {
     fn reset(&mut self) {
-        #[allow(invalid_value)]
-        let mut memory = unsafe { core::mem::MaybeUninit::uninit().assume_init() };
-
-        core::mem::swap(&mut self.i2c, &mut memory);
-
-        let (i2c, pins) = memory.free();
-        self.i2c = BlockingI2c::<I2C, PINS>::configure(
-            i2c,
-            pins,
-            self.mode,
-            self.clocks,
-            START_TIMEOUT_US,
-            START_RETRIES,
-            ADDR_TIMEOUT_US,
-            DATA_TIMEOUT_US,
-        );
+        if let Some(i2c) = self.i2c.take() {
+            let (i2c, pins) = i2c.free();
+            self.i2c = Some(BlockingI2c::<I2C, PINS>::configure(
+                i2c,
+                pins,
+                self.mode,
+                self.clocks,
+                START_TIMEOUT_US,
+                START_RETRIES,
+                ADDR_TIMEOUT_US,
+                DATA_TIMEOUT_US,
+            ));
+        }
     }
 }

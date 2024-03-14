@@ -59,7 +59,7 @@ where
             + From<<I2C as embedded_hal::blocking::i2c::Write>::Error>,
     {
         assert!(dest.size() == <Self as super::Device>::data_size(self));
-        super::read_comon::read_i2c_leacy_pic::<I2C, Self::Error>(addr, dest, i2c)
+        super::read_comon::read_i2c_legacy_pic::<I2C, Self::Error>(addr, dest, i2c)
     }
 }
 

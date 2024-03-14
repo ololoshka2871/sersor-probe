@@ -3,7 +3,7 @@ use core::{fmt::Write, str::FromStr};
 use alloc::string::String;
 use num::traits::float::FloatCore;
 
-pub fn format_float_simple(mut v: f32, percision: i32) -> String {
+pub fn format_float_simple(mut v: f32, percision: u32) -> String {
     if v.is_nan() {
         String::from_str("NaN").unwrap()
     } else {
@@ -12,14 +12,15 @@ pub fn format_float_simple(mut v: f32, percision: i32) -> String {
             v = -v;
             res.push('-');
         }
-        let a = v.floor();
-        write!(
-            &mut res,
-            "{}.{}",
-            a as i32,
-            ((v - a) * 10.0.powi(percision)).round() as i32
-        )
-        .unwrap();
+        
+        let mut a = v.floor() as i32;
+        let mut r = ((v - a as f32) * 10.0.powi(percision as i32)).round() as i32;
+        if r == 10i32.pow(percision) {
+            a += 1;
+            r = 0;
+        }
+
+        write!(&mut res, "{}.{}", a, r).unwrap();
         res
     }
 }

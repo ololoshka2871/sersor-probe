@@ -13,6 +13,8 @@ pub trait ValuesStorage: Send {
     fn print(&self) -> String;
     fn render(&self, field_width: u32) -> Vec<String>;
     fn as_mut_slice(&mut self) -> &mut [u8];
+    fn write_bytes(&mut self, buf: &[u8]);
+    fn write_f32(&mut self, value: f32);
 }
 
 pub trait Device: Sync {

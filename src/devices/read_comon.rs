@@ -8,10 +8,11 @@ use super::{DecodeError, I2CAddress, ValuesStorage};
 
 const DATA_REG_LEGACY_I2C: u8 = 0x00;
 
-pub fn read_i2c_leacy_pic<I2C, Error>(
+pub fn read_i2c_common<I2C, Error>(
     addr: I2CAddress,
     dest: &mut dyn ValuesStorage,
     i2c: &mut I2C,
+    size: u8,
 ) -> Result<(), I2CBridgeError>
 where
     I2C: Read + Write + crate::hw::Reconfigure + crate::hw::Reset,
@@ -23,11 +24,49 @@ where
     let cmd = MyI2COperation::new_write_op(&mut buff, addr, &[DATA_REG_LEGACY_I2C]);
     cmd.execute(i2c)?;
 
-    let cmd = MyI2COperation::new_read_op(&mut buff, addr, dest.size() as u8);
+    let cmd = MyI2COperation::new_read_op(&mut buff, addr, size);
     let resp = cmd.execute(i2c)?;
 
-    dest.copy_from(&resp[2..2 + dest.size()]);
+    dest.copy_from(&resp[2..(2 + size as usize)]);
     Ok(())
+}
+
+pub fn read_i2c_legacy_pic<I2C, Error>(
+    addr: I2CAddress,
+    dest: &mut dyn ValuesStorage,
+    i2c: &mut I2C,
+) -> Result<(), I2CBridgeError>
+where
+    I2C: Read + Write + crate::hw::Reconfigure + crate::hw::Reset,
+    I2CBridgeError: From<<I2C as embedded_hal::blocking::i2c::Read>::Error>
+        + From<<I2C as embedded_hal::blocking::i2c::Write>::Error>,
+{
+    let size = dest.size() as u8;
+    read_i2c_common::<I2C, Error>(addr, dest, i2c, size)
+}
+
+pub fn read_i2c_f32<I2C, Error>(
+    dev_addr: I2CAddress,
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<f32, I2CBridgeError>
+where
+    I2C: Read + Write + crate::hw::Reconfigure + crate::hw::Reset,
+    I2CBridgeError: From<<I2C as embedded_hal::blocking::i2c::Read>::Error>
+        + From<<I2C as embedded_hal::blocking::i2c::Write>::Error>,
+{
+    let mut buff = [0u8; MyI2COperation::MAX_BUF_SIZE];
+    let addr = [addr];
+
+    let cmd = MyI2COperation::new_write_op(&mut buff, dev_addr, &addr);
+    cmd.execute(i2c)?;
+
+    let cmd = MyI2COperation::new_read_op(&mut buff, dev_addr, core::mem::size_of::<f32>() as u8);
+    let resp = cmd.execute(i2c)?;
+
+    unsafe {
+        Ok(core::mem::transmute::<&[u8], &[f32]>(&resp[2..2 + core::mem::size_of::<f32>()])[0])
+    }
 }
 
 pub fn modbus_resp_to_storage_linear(

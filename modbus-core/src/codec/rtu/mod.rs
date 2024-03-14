@@ -1,7 +1,6 @@
 //! Modbus RTU
 
 use super::*;
-use byteorder::{BigEndian, ByteOrder};
 
 pub mod server;
 pub mod client;

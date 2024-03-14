@@ -1,31 +1,30 @@
 use alloc::vec::Vec;
 use alloc::{format, string::String};
-use tbytes::TBytesReaderFor;
 
 use crate::devices::ValuesStorage;
 
 use crate::support::format_float_simple as f;
 
 #[derive(defmt_macros::Format, Copy, Clone)]
-pub struct PTFpFtstorage {
+pub struct PTFpFtTCpuVInStorage {
     pub sender: &'static str,
-    pub data: [f32; 4],
+    pub data: [f32; 6],
     pub offset: usize,
 }
 
-impl PTFpFtstorage {
+impl PTFpFtTCpuVInStorage {
     pub fn new(sender: &'static str) -> Self {
         Self {
             sender,
-            data: [0.0; 4],
+            data: [0.0; 6],
             offset: 0,
         }
     }
 }
 
-impl ValuesStorage for PTFpFtstorage {
+impl ValuesStorage for PTFpFtTCpuVInStorage {
     fn size(&self) -> usize {
-        4 * core::mem::size_of::<f32>()
+        6 * core::mem::size_of::<f32>()
     }
 
     fn copy_from(&mut self, src: &[u8]) {
@@ -43,11 +42,13 @@ impl ValuesStorage for PTFpFtstorage {
         write!(s, "{{ ").ok();
         write!(
             s,
-            "P={}, T={}, Fp={}, Ft={}",
+            "P={}, T={}, Fp={}, Ft={}, Tcpu={}, Vin={}",
             f(self.data[0], 2),
             f(self.data[1], 2),
             f(self.data[2], 2),
-            f(self.data[3], 2)
+            f(self.data[3], 2),
+            f(self.data[4], 2),
+            f(self.data[5], 2)
         )
         .ok();
         write!(s, " }}").ok();
@@ -67,7 +68,17 @@ impl ValuesStorage for PTFpFtstorage {
                 "Ft={:>w$}",
                 f(self.data[3], 1),
                 w = field_width as usize - 3
-            )
+            ),
+            format!(
+                "Tcpu={:>w$}",
+                f(self.data[4], 1),
+                w = field_width as usize - 5
+            ),
+            format!(
+                "Vin={:>w$}",
+                f(self.data[5], 1),
+                w = field_width as usize - 4
+            ),
         ]
     }
 

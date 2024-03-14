@@ -32,9 +32,8 @@ pub enum Error {
     Acknowledge,
     /// Overrun/underrun
     Overrun,
-    // Pec, // SMBUS mode only
+    // Timeout waiting SCL low
     Timeout,
-    // Alert, // SMBUS mode only
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]

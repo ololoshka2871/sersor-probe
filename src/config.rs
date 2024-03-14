@@ -22,8 +22,8 @@ pub const HID_I2C_POLL_INTERVAL_MS: u8 = 10;
 pub const I2C_ADDR_MIN: u8 = 0x0;
 pub const I2C_ADDR_MIN_MAX: u8 = 0x7F;
 
-pub const I2C_ERROR_MAX_COUNT: u8 = 3;
-pub const MODBUS_ERROR_MAX_COUNT: u8 = 3;
+pub const I2C_ERROR_MAX_COUNT: u8 = 5;
+pub const MODBUS_ERROR_MAX_COUNT: u8 = 5;
 
 pub const CDC_ACM_MAX_PACKET_SIZE: u16 = 64;
 

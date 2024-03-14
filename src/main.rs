@@ -42,9 +42,9 @@ use crate::bridge::{BufferTrait, Builder, Execute, RxBuffer};
 type TsensorI2c = hw::I2cWraper<I2C1, (PB8<Alternate<OpenDrain>>, PB9<Alternate<OpenDrain>>)>;
 
 pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
-    &[&devices::DeviceDba0];
+    &[&devices::DeviceDba0, &devices::DeviceC002];
 
-pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice] = &[&devices::DeviceDba0];
+pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice] = &[&devices::DeviceDba0, /*&devices::DeviceC002*/];
 
 //-----------------------------------------------------------------------------
 
@@ -297,23 +297,13 @@ mod app {
                 gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
                 gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
             ),
-            /*
-            ctx.device.I2C1,
-            (
-                gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
-                gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
-            ),
-            &mut afio.mapr,
-            */
             clocks,
             hw::Mode::Standard {
                 frequency: Hertz::kHz(100),
             },
         );
 
-        let mut current_meter = support::CurrentMeter::new(ina219_i2c, [0x40, 0x41, 0x42]);
-
-        //let mut current_meter = support::CurrentMeter::new_sim([0x40, 0x41, 0x42]);
+        let mut current_meter = support::CurrentMeter::new(ina219_i2c, [0x40, 0x42, 0x41]);
 
         const CAL_VAL: f32 = 0.04096 / (config::LSB * config::R_SUNT_OM);
         static_assertions::const_assert!(CAL_VAL < u16::MAX as f32);

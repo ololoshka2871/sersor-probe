@@ -1,5 +1,6 @@
 use embedded_graphics::{geometry::Point, primitives::Line};
 
+#[allow(dead_code)]
 pub trait RectangleExt {
     fn top_right(&self) -> Option<Point>;
     fn bottom_left(&self) -> Option<Point>;

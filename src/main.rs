@@ -20,14 +20,14 @@ use stm32f1xx_hal::afio::AfioExt;
 use stm32f1xx_hal::dma::DmaExt;
 use stm32f1xx_hal::flash::FlashExt;
 use stm32f1xx_hal::gpio::{
-    Alternate, GpioExt, Input, OpenDrain, Output, PinState, PullUp, PA1, PA10, PA3, PA5, PA7, PA9,
-    PB10, PB11, PB6, PB7,
+    Alternate, GpioExt, Input, OpenDrain, Output, PinState, PullUp, PA2, PA3, PA4, PA5, PA7, PB1,
+    PB10, PB11, PB6, PB7, PB8, PB9,
 };
 use stm32f1xx_hal::spi::{NoMiso, Spi, Spi1NoRemap};
 use stm32f1xx_hal::time::{Hertz, U32Ext};
 use stm32f1xx_hal::usb::{Peripheral, UsbBus, UsbBusType};
 
-use stm32f1xx_hal::pac::{Interrupt, I2C1, I2C2, SPI1, USART1, USART3};
+use stm32f1xx_hal::pac::{Interrupt, I2C1, I2C2, SPI1, USART1, USART2};
 
 use usb_device::prelude::{UsbDevice, UsbDeviceBuilder};
 
@@ -39,7 +39,7 @@ use crate::bridge::{BufferTrait, Builder, Execute, RxBuffer};
 
 //-----------------------------------------------------------------------------
 
-type TsensorI2c = hw::I2cWraper<I2C1, (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>)>;
+type TsensorI2c = hw::I2cWraper<I2C1, (PB8<Alternate<OpenDrain>>, PB9<Alternate<OpenDrain>>)>;
 
 pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
     &[&devices::DeviceDba0];
@@ -86,17 +86,17 @@ mod app {
         display_state: display_state::DisplayState<{ config::SYSTICK_RATE_HZ }>,
 
         uart1: support::UartHalfDuplex<
-            'A',
-            8,
+            'B',
+            5,
             USART1,
-            (PA9<Alternate>, PA10<Input<PullUp>>),
+            (PB6<Alternate>, PB7<Input<PullUp>>),
             { config::SYSTICK_RATE_HZ },
         >,
         uart2: support::UartHalfDuplex<
-            'B',
-            5,
-            USART3,
-            (PB10<Alternate>, PB11<Input<PullUp>>),
+            'A',
+            1,
+            USART2,
+            (PA2<Alternate>, PA3<Input<PullUp>>),
             { config::SYSTICK_RATE_HZ },
         >,
 
@@ -131,14 +131,14 @@ mod app {
         display: ssd1309::mode::GraphicsMode<
             display_interface_spi::SPIInterface<
                 Spi<SPI1, Spi1NoRemap, (PA5<Alternate>, NoMiso, PA7<Alternate>), u8>,
-                PA3<Output>,
-                PA1<Output>,
+                PB1<Output>,
+                PA4<Output>,
             >,
         >,
 
         current_meter: support::CurrentMeter<
-            I2C1,                                                   //I2C2,
-            (PB6<Alternate<OpenDrain>>, PB7<Alternate<OpenDrain>>), //(PB10<Alternate<OpenDrain>>, PB11<Alternate<OpenDrain>>),
+            I2C2,
+            (PB10<Alternate<OpenDrain>>, PB11<Alternate<OpenDrain>>),
             3,
         >,
         clocks: stm32f1xx_hal::rcc::Clocks,
@@ -178,8 +178,8 @@ mod app {
         let mut afio = ctx.device.AFIO.constrain();
         let (_pa15, _pb3, _pb4) = afio.mapr.disable_jtag(gpioa.pa15, gpiob.pb3, gpiob.pb4);
 
-        let mut usb_pull_up = gpiob.pb8.into_push_pull_output_with_state(
-            &mut gpiob.crh,
+        let mut usb_pull_up = gpioa.pa10.into_push_pull_output_with_state(
+            &mut gpioa.crh,
             if !config::USB_PULLUP_ACTVE_LEVEL {
                 stm32f1xx_hal::gpio::PinState::High
             } else {
@@ -237,8 +237,8 @@ mod app {
         let uart1 = stm32f1xx_hal::serial::Serial::new(
             ctx.device.USART1,
             (
-                gpioa.pa9.into_alternate_push_pull(&mut gpioa.crh),
-                gpioa.pa10.into_pull_up_input(&mut gpioa.crh),
+                gpiob.pb6.into_alternate_push_pull(&mut gpiob.crl),
+                gpiob.pb7.into_pull_up_input(&mut gpiob.crl),
             ),
             &mut afio.mapr,
             stm32f1xx_hal::serial::Config::default()
@@ -247,16 +247,16 @@ mod app {
                 .baudrate(config::DEFAULT_MODBUS_BAUD_RATE.bps()),
             &clocks,
         );
-        let re_de1 = gpioa
-            .pa8
-            .into_push_pull_output_with_state(&mut gpioa.crh, PinState::Low);
+        let re_de1 = gpiob
+            .pb5
+            .into_push_pull_output_with_state(&mut gpiob.crl, PinState::Low);
 
         // UART3
         let uart2 = stm32f1xx_hal::serial::Serial::new(
-            ctx.device.USART3,
+            ctx.device.USART2,
             (
-                gpiob.pb10.into_alternate_push_pull(&mut gpiob.crh),
-                gpiob.pb11.into_pull_up_input(&mut gpiob.crh),
+                gpioa.pa2.into_alternate_push_pull(&mut gpioa.crl),
+                gpioa.pa3.into_pull_up_input(&mut gpioa.crl),
             ),
             &mut afio.mapr,
             stm32f1xx_hal::serial::Config::default()
@@ -266,24 +266,21 @@ mod app {
             &clocks,
         );
 
-        let re_de2 = gpiob
-            .pb5
-            .into_push_pull_output_with_state(&mut gpiob.crl, PinState::Low);
+        let re_de2 = gpioa
+            .pa1
+            .into_push_pull_output_with_state(&mut gpioa.crl, PinState::Low);
 
         defmt::info!("Serial ports");
 
         //---------------------------------------------------------------------
 
-        let i2c_wraper = hw::I2cWraper::new_sim(
-            /* FIXME
-            hw::I2cWraper::i2c1(
+        let i2c_wraper = hw::I2cWraper::i2c1(
             ctx.device.I2C1,
             (
-                gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
-                gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
+                gpiob.pb8.into_alternate_open_drain(&mut gpiob.crh),
+                gpiob.pb9.into_alternate_open_drain(&mut gpiob.crh),
             ),
             &mut afio.mapr,
-            */
             clocks,
             hw::Mode::Standard {
                 frequency: Hertz::kHz(100),
@@ -294,20 +291,20 @@ mod app {
 
         //---------------------------------------------------------------------
 
-        let ina219_i2c = hw::I2cWraper::i2c1(
-            /* FIXME
+        let ina219_i2c = hw::I2cWraper::i2c2(
             ctx.device.I2C2,
             (
                 gpiob.pb10.into_alternate_open_drain(&mut gpiob.crh),
                 gpiob.pb11.into_alternate_open_drain(&mut gpiob.crh),
             ),
-            */
+            /*
             ctx.device.I2C1,
             (
                 gpiob.pb6.into_alternate_open_drain(&mut gpiob.crl),
                 gpiob.pb7.into_alternate_open_drain(&mut gpiob.crl),
             ),
             &mut afio.mapr,
+            */
             clocks,
             hw::Mode::Standard {
                 frequency: Hertz::kHz(100),
@@ -342,8 +339,8 @@ mod app {
                 Hertz::MHz(8),             // работает на 5 МГц
                 clocks,
             ),
-            gpioa.pa3.into_push_pull_output(&mut gpioa.crl),
-            gpioa.pa1.into_push_pull_output(&mut gpioa.crl),
+            gpiob.pb1.into_push_pull_output(&mut gpiob.crl),
+            gpioa.pa4.into_push_pull_output(&mut gpioa.crl),
         );
 
         let mut disp: ssd1309::prelude::GraphicsMode<_> = ssd1309::Builder::new()
@@ -351,7 +348,7 @@ mod app {
             .connect(di)
             .into();
         let syst = {
-            let mut reset = gpioa.pa2.into_push_pull_output(&mut gpioa.crl);
+            let mut reset = gpiob.pb0.into_push_pull_output(&mut gpiob.crl);
             let mut delay_provider =
                 cortex_m::delay::Delay::new(ctx.core.SYST, clocks.hclk().to_Hz());
 
@@ -737,7 +734,7 @@ mod app {
         let current_values = if let Ok(mut current) = current_meter.current(config::LSB) {
             current.iter_mut().for_each(|v| *v *= 1000f32);
 
-            defmt::info!("Current: {} mA", current);
+            defmt::debug!("Current: {} mA", current);
 
             display_state::CurrentValues::from(current)
         } else {

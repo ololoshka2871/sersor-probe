@@ -8,6 +8,7 @@ use crate::support::clocking::{ClockConfigProvider, MyConfig};
 
 pub struct HighPerformanceClockConfigProvider;
 
+#[allow(dead_code)]
 impl HighPerformanceClockConfigProvider {
     fn ahb_dev2val(ahb_dev: HPre) -> u32 {
         match ahb_dev {

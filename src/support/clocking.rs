@@ -1,5 +1,6 @@
 use stm32f1xx_hal::{device::rcc::cfgr::PLLXTPRE_A, prelude::_fugit_RateExtU32, time::Hertz};
 
+#[allow(dead_code)]
 pub(crate) trait ClockConfigProvider {
     fn core_frequency() -> Hertz;
     fn apb1_frequency() -> Hertz;

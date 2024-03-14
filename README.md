@@ -14,13 +14,14 @@
 | --- | --- |
 | `PA2` | TX |
 | `PA3` | RX |
-| `PA1` | RE/DE |
+| `PA1` | RE/DE1 |
 
 ## UART (UART1)
 | Pin | Usage |
 | --- | --- |
 | `PB6` | TX |
 | `PB7` | RX |
+| `PB5` | RE/DE2 |
 
 ## Sensor I2C (I2C1)
 | Pin | Usage |

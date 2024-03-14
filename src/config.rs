@@ -31,7 +31,7 @@ pub const CDC_ACM_MAX_PACKET_SIZE: u16 = 64;
 
 pub const CURRENT_READ_INTERVAL_MS: u64 = 250;
 pub const SCREENSAVER_TIMEOUT_MS: u64 = 10_000;
-pub const CURRENT_THRESHOLD_MA: f32 = 0.1;
+pub const CURRENT_THRESHOLD_MA: f32 = 0.5;
 
 pub const R_SUNT_OM: f32 = 0.1;
 

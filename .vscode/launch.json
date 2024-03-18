@@ -13,7 +13,6 @@
             "cwd": "${workspaceRoot}",
             "executable": "./target/thumbv7m-none-eabi/debug/sersor-probe", // бинарь
             "request": "attach", // позволяет не прошивать таргет при запуске
-            "loadFiles": false, 
             "svdFile": "STM32F103.svd",
             "servertype": "external", // Подключиться к внешнему отладочному интерфейсу
             "gdbTarget": "localhost:2331", // адрес куда подключаться
@@ -31,7 +30,6 @@
             "cwd": "${workspaceRoot}",
             "executable": "./target/thumbv7m-none-eabi/release/sersor-probe", // бинарь
             "request": "attach", // позволяет не прошивать таргет при запуске
-            "loadFiles": false, 
             "svdFile": "STM32F103.svd",
             "servertype": "external", // Подключиться к внешнему отладочному интерфейсу
             "gdbTarget": "localhost:2331", // адрес куда подключаться

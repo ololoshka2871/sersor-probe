@@ -81,10 +81,7 @@ impl ModbusDevice for DeviceDba0 {
     fn build_data_request_iter(&self) -> Box<dyn Iterator<Item = RequestPdu<'static>>> {
         Box::new(
             [
-                // Специально разбито на 3 запроса для тестирования
-                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 2)), // P
-                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x02, 2)), // T
-                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x04, 4)), // Fp + Ft
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 8)), // P + T + Fp + Ft
             ]
             .into_iter(),
         )
@@ -96,6 +93,6 @@ impl ModbusDevice for DeviceDba0 {
         resps: &mut dyn Iterator<Item = &(alloc::vec::Vec<u8>, &str)>,
         bus_id: &'static str,
     ) -> Result<(), DecodeError> {
-        super::read_comon::modbus_resp_to_storage_linear(bus_id, dest, resps)
+        super::read_comon::modbus_resp_to_storage_linear::<byteorder::BigEndian>(bus_id, dest, resps)
     }
 }

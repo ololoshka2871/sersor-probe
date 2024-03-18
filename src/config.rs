@@ -50,7 +50,7 @@ pub const DEFAULT_MODBUS_STOP_BITS: StopBits = StopBits::STOP1;
 pub const DEFAULT_MODBUS_BAUD_RATE: u32 = 57600;
 
 pub const MODBUS_RESP_TIMEOUT_MS: u64 = 50;
-pub const MODBUS_DISPATCHER_QUEUE_SIZE: usize = 5;
+pub const MODBUS_DISPATCHER_QUEUE_SIZE: usize = 8;
 pub const MODBUS_SELF_INQUARY_QUEUE_SIZE: usize = MODBUS_DISPATCHER_QUEUE_SIZE - 1;
 
 //-----------------------------------------------------------------------------

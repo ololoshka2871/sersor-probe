@@ -1,5 +1,3 @@
-use core::mem::size_of;
-
 use alloc::boxed::Box;
 
 use embedded_hal::blocking::i2c::{Read, Write};
@@ -65,6 +63,7 @@ where
     {
         assert!(dest.size() == <Self as super::Device>::data_size(self));
 
+        // P + T + Fp + Ft
         super::read_comon::read_i2c_common::<I2C, Self::Error>(
             addr,
             dest,
@@ -72,12 +71,52 @@ where
             4 * core::mem::size_of::<f32>() as u8,
         )?;
 
+        // Tcpu
         let t_cpu = read_i2c_f32::<I2C, Self::Error>(addr, i2c, T_CPU_REG_ADDR)?;
         dest.write_f32(t_cpu);
 
+        // Vin
         let v_in = read_i2c_f32::<I2C, Self::Error>(addr, i2c, V_IN_REG_ADDR)?;
         dest.write_f32(v_in);
 
         Ok(())
+    }
+}
+
+impl ModbusDevice for DeviceC002 {
+    fn probe_resp(&self, id_resp: ResponseAdu<'_>) -> Result<(), DecodeError> {
+        match id_resp.pdu.0 {
+            Err(e) => Err(DecodeError::ResponseError(e)),
+            Ok(Response::ReadHoldingRegisters(data)) => {
+                if Some(C002_ID) == data.get(0) {
+                    Ok(())
+                } else {
+                    Err(DecodeError::InvalidDeviceId)
+                }
+            }
+            _ => Err(DecodeError::InvalidResponseType),
+        }
+    }
+
+    fn build_data_request_iter(&self) -> Box<dyn Iterator<Item = RequestPdu<'static>>> {
+        Box::new(
+            [
+                // По точно не определенной причине запросы будут выплюнуты в обратном порядке, поэтому и тут 
+                // их нужно перечислить в обратном порядке
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x20, 4)), // Tcpu + Vin
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x08, 4)), // Fp + Ft
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 4)), // P + T  
+            ]
+            .into_iter(),
+        )
+    }
+
+    fn decode_resps(
+        &self,
+        dest: &mut dyn super::ValuesStorage,
+        resps: &mut dyn Iterator<Item = &(alloc::vec::Vec<u8>, &str)>,
+        bus_id: &'static str,
+    ) -> Result<(), DecodeError> {
+        super::read_comon::modbus_resp_to_storage_linear::<byteorder::LittleEndian>(bus_id, dest, resps)
     }
 }

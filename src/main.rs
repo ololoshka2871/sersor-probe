@@ -44,7 +44,7 @@ type TsensorI2c = hw::I2cWraper<I2C1, (PB8<Alternate<OpenDrain>>, PB9<Alternate<
 pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
     &[&devices::DeviceDba0, &devices::DeviceC002];
 
-pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice] = &[&devices::DeviceDba0, /*&devices::DeviceC002*/];
+pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice] = &[&devices::DeviceDba0, &devices::DeviceC002];
 
 //-----------------------------------------------------------------------------
 
@@ -251,7 +251,7 @@ mod app {
             .pb5
             .into_push_pull_output_with_state(&mut gpiob.crl, PinState::Low);
 
-        // UART3
+        // UART2
         let uart2 = stm32f1xx_hal::serial::Serial::new(
             ctx.device.USART2,
             (
@@ -423,8 +423,8 @@ mod app {
         );
     }
 
-    #[task(binds = USART3, shared = [uart2, modbus2_dispatcher], local = [uart2_mb_assembly_buffer], priority = 4)]
-    fn uart3(ctx: uart3::Context) {
+    #[task(binds = USART2, shared = [uart2, modbus2_dispatcher], local = [uart2_mb_assembly_buffer], priority = 4)]
+    fn uart2(ctx: uart2::Context) {
         let mut uart = ctx.shared.uart2;
         let mut dispatcher = ctx.shared.modbus2_dispatcher;
         let mb_assembly_buffer = ctx.local.uart2_mb_assembly_buffer;
@@ -885,7 +885,7 @@ mod app {
                 );
 
                 try_tx_to_vcom!(
-                    name = UART1_BUS_BIND,
+                    name = UART2_BUS_BIND,
                     modbus_resp_buffer = modbus2_resp_buffer,
                     vcom = v_com2
                 );

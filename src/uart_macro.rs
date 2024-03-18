@@ -85,11 +85,9 @@ macro_rules! process_modbus_dispatcher {
                         if bus_name == &$bus_name {
                             if modbus_dispatcher.push_request(dr, bridge::Requester::Device, now) {
                                 device_request.pop_front();
-                            } else {
-                                break;
                             }
                         } else {
-                            device_request.pop_front();
+                            break;
                         }
                     }
                 });
@@ -158,7 +156,7 @@ macro_rules! uart_interrupt {
                     uart.reset_tx_delay(now);
                     if $modbus_assembly_buffer.feed_byte(byte) {
                         if let Some(adu) = $modbus_assembly_buffer.try_decode_response() {
-                            defmt::debug!("{}: Valid response!", $name);
+                            defmt::trace!("{}: Valid response!", $name);
                             $dispatcher.lock(|dispatcher| {
                                 dispatcher.dispatch_response(
                                     $modbus_assembly_buffer.as_slice(),
@@ -175,7 +173,6 @@ macro_rules! uart_interrupt {
                 }
             } else {
                 if let Some(tx) = uart.tx_irq() {
-                    
                     match $dispatcher.lock(bridge::ModbusDispatcher::next_tx) {
                         Ok(byte) => {
                             tx.write(byte).ok();

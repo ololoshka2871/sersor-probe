@@ -1,4 +1,7 @@
+use core::any::TypeId;
+
 use alloc::vec::Vec;
+use byteorder::{BigEndian, LittleEndian};
 use embedded_hal::blocking::i2c::{Read, Write};
 use modbus_core::Response;
 
@@ -69,7 +72,7 @@ where
     }
 }
 
-pub fn modbus_resp_to_storage_linear(
+pub fn modbus_resp_to_storage_linear<Endian: 'static>(
     bus_id: &'static str,
     dest: &mut dyn super::ValuesStorage,
     resps: &mut dyn Iterator<Item = &(Vec<u8>, &str)>,
@@ -90,8 +93,15 @@ pub fn modbus_resp_to_storage_linear(
                         if offset + core::mem::size_of::<u16>() > buf.len() {
                             return Err(DecodeError::InsuficientData);
                         }
-                        buf[offset..offset + core::mem::size_of::<u16>()]
-                            .copy_from_slice(&word.to_be_bytes());
+
+                        buf[offset..offset + core::mem::size_of::<u16>()].copy_from_slice(
+                            &match TypeId::of::<Endian>() {
+                                e if e == TypeId::of::<BigEndian>() => word.to_be_bytes(),
+                                e if e == TypeId::of::<LittleEndian>() => word.to_le_bytes(),
+                                _ => panic!("Unsupported endian type!"),
+                            },
+                        );
+
                         offset += core::mem::size_of::<u16>();
                     }
                 }

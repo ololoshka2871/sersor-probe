@@ -7,6 +7,10 @@ pub fn update_line_coding_if_changed(
     new: &LineCoding,
     bus_name: &'static str,
 ) -> bool {
+    if new.data_bits() == 0 || new.data_rate() == 0 {
+        return false;
+    }
+
     if lc.data_rate != new.data_rate()
         || lc.parity_type != new.parity_type()
         || lc.stop_bits != new.stop_bits()

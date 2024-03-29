@@ -6,23 +6,23 @@ use crate::devices::ValuesStorage;
 use crate::support::format_float_simple as f;
 
 #[derive(defmt_macros::Format, Copy, Clone)]
-pub struct PTFpFtstorage {
+pub struct TFtstorage {
     pub sender: &'static str,
-    pub data: [f32; 4],
+    pub data: [f32; 2],
     pub offset: usize,
 }
 
-impl PTFpFtstorage {
+impl TFtstorage {
     pub fn new(sender: &'static str) -> Self {
         Self {
             sender,
-            data: [0.0; 4],
+            data: [0.0; 2],
             offset: 0,
         }
     }
 }
 
-impl ValuesStorage for PTFpFtstorage {
+impl ValuesStorage for TFtstorage {
     fn size(&self) -> usize {
         self.data.len() * core::mem::size_of::<f32>()
     }
@@ -42,11 +42,9 @@ impl ValuesStorage for PTFpFtstorage {
         write!(s, "{{ ").ok();
         write!(
             s,
-            "P={}, T={}, Fp={}, Ft={}",
+            "T={}, Ft={}",
             f(self.data[0], 2),
             f(self.data[1], 2),
-            f(self.data[2], 2),
-            f(self.data[3], 2)
         )
         .ok();
         write!(s, " }}").ok();
@@ -55,16 +53,10 @@ impl ValuesStorage for PTFpFtstorage {
 
     fn render(&self, field_width: u32) -> Vec<String> {
         alloc::vec![
-            format!("P={:>w$}", f(self.data[0], 2), w = field_width as usize - 2),
-            format!("T={:>w$}", f(self.data[1], 2), w = field_width as usize - 2),
-            format!(
-                "Fp={:>w$}",
-                f(self.data[2], 1),
-                w = field_width as usize - 3
-            ),
+            format!("T={:>w$}", f(self.data[0], 2), w = field_width as usize - 2),
             format!(
                 "Ft={:>w$}",
-                f(self.data[3], 1),
+                f(self.data[1], 1),
                 w = field_width as usize - 3
             )
         ]

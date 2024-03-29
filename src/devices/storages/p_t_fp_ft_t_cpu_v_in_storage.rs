@@ -24,7 +24,7 @@ impl PTFpFtTCpuVInStorage {
 
 impl ValuesStorage for PTFpFtTCpuVInStorage {
     fn size(&self) -> usize {
-        6 * core::mem::size_of::<f32>()
+        self.data.len() * core::mem::size_of::<f32>()
     }
 
     fn copy_from(&mut self, src: &[u8]) {

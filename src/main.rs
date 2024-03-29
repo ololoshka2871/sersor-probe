@@ -41,10 +41,19 @@ use crate::bridge::{BufferTrait, Builder, Execute, RxBuffer};
 
 type TsensorI2c = hw::I2cWraper<I2C1, (PB8<Alternate<OpenDrain>>, PB9<Alternate<OpenDrain>>)>;
 
-pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] =
-    &[&devices::DeviceDba0, &devices::DeviceC002];
+// register I2C devices
+pub static I2C_DEVICES: &[&dyn devices::I2CDevice<TsensorI2c, Error = bridge::I2CBridgeError>] = &[
+    &devices::DeviceDba0,
+    &devices::DeviceDba2,
+    &devices::DeviceC002,
+];
 
-pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice] = &[&devices::DeviceDba0, &devices::DeviceC002];
+// register Modbus devices
+pub static MODBUS_DEVICES: &[&dyn devices::ModbusDevice] = &[
+    &devices::DeviceDba0,
+    &devices::DeviceDba2,
+    &devices::DeviceC002,
+];
 
 //-----------------------------------------------------------------------------
 

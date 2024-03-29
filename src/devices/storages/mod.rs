@@ -1,6 +1,9 @@
 mod p_t_fp_ft_storage;
 pub use p_t_fp_ft_storage::PTFpFtstorage;
 
+mod t_ft_storage;
+pub use t_ft_storage::TFtstorage;
+
 mod p_t_fp_ft_t_cpu_v_in_storage;
 pub use p_t_fp_ft_t_cpu_v_in_storage::PTFpFtTCpuVInStorage;
 

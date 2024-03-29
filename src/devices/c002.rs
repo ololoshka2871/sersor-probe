@@ -101,13 +101,11 @@ impl ModbusDevice for DeviceC002 {
     fn build_data_request_iter(&self) -> Box<dyn Iterator<Item = RequestPdu<'static>>> {
         Box::new(
             [
-                // По точно не определенной причине запросы будут выплюнуты в обратном порядке, поэтому и тут 
-                // их нужно перечислить в обратном порядке
-                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x20, 4)), // Tcpu + Vin
-                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x08, 4)), // Fp + Ft
                 modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 4)), // P + T  
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x08, 4)), // Fp + Ft
+                modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x20, 4)), // Tcpu + Vin
             ]
-            .into_iter(),
+            .into_iter().rev(), // reverse order
         )
     }
 

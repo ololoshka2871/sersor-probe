@@ -30,7 +30,7 @@ pub const CDC_ACM_MAX_PACKET_SIZE: u16 = 64;
 
 pub const CURRENT_READ_INTERVAL_MS: u64 = 250;
 pub const SCREENSAVER_TIMEOUT_MS: u64 = 10_000;
-pub const CURRENT_THRESHOLD_MA: f32 = 0.5;
+pub const CURRENT_THRESHOLD_MA: f32 = 0.8;
 
 pub const R_SUNT_OM: f32 = 0.1;
 
@@ -51,10 +51,11 @@ pub const DEFAULT_MODBUS_BAUD_RATE: u32 = 57600;
 pub const MODBUS_RESP_TIMEOUT_MS: u64 = 50;
 pub const MODBUS_DISPATCHER_QUEUE_SIZE: usize = 8;
 pub const MODBUS_SELF_INQUARY_QUEUE_SIZE: usize = MODBUS_DISPATCHER_QUEUE_SIZE - 1;
+pub const MODBUS_DETECT_RETRYS: u8 = 2;
 
 //-----------------------------------------------------------------------------
 
-pub const START_DURATION_MS: u64 = 3000;
+pub const START_DURATION_MS: u64 = 1000;
 pub const MAX_ADDR_TO_SCAN: u8 = 0x30;
 
 //-----------------------------------------------------------------------------

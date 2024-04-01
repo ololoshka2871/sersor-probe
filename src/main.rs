@@ -154,6 +154,8 @@ mod app {
 
         uart1_mb_assembly_buffer: support::Buffer<{ bridge::MODBUS_BUFFER_SIZE_MAX }>,
         uart2_mb_assembly_buffer: support::Buffer<{ bridge::MODBUS_BUFFER_SIZE_MAX }>,
+
+        modbus_detect_retrys: u8,
     }
 
     #[monotonic(binds = SysTick, default = true)]
@@ -411,6 +413,8 @@ mod app {
                     support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new(),
                 uart2_mb_assembly_buffer:
                     support::Buffer::<{ bridge::MODBUS_BUFFER_SIZE_MAX }>::new(),
+
+                modbus_detect_retrys: 0,
             },
             init::Monotonics(mono),
         )
@@ -559,7 +563,7 @@ mod app {
 
     //-------------------------------------------------------------------------
 
-    #[task(shared = [display_state, device_modbus_request, device_modbus_response], local=[modbus_device, modbus_error_count], priority = 1)]
+    #[task(shared = [display_state, device_modbus_request, device_modbus_response], local=[modbus_device, modbus_error_count, modbus_detect_retrys], priority = 1)]
     fn modbus_inquary_process(
         ctx: modbus_inquary_process::Context,
         bus_id: &'static str,
@@ -573,6 +577,7 @@ mod app {
 
         let device = ctx.local.modbus_device;
         let modbus_error_count = ctx.local.modbus_error_count;
+        let detect_retrys = ctx.local.modbus_detect_retrys;
 
         // reset
         if scan_addr == 0 {
@@ -581,17 +586,18 @@ mod app {
             tx.lock(|tx| tx.clear());
         }
 
-        let mut send_data_reqs = |device: &dyn devices::ModbusDevice| {
-            tx.lock(|tx| {
-                device.build_data_request_iter().for_each(|pdu| {
-                    let req = modbus_core::rtu::RequestAdu {
-                        hdr: modbus_core::rtu::Header { slave: scan_addr },
-                        pdu,
-                    };
-                    tx.push_back((req, bus_id)).unwrap();
-                })
-            });
-        };
+        let mut send_data_reqs =
+            |device: &dyn devices::ModbusDevice, scan_addr: modbus_core::rtu::SlaveId| {
+                tx.lock(|tx| {
+                    device.build_data_request_iter().for_each(|pdu| {
+                        let req = modbus_core::rtu::RequestAdu {
+                            hdr: modbus_core::rtu::Header { slave: scan_addr },
+                            pdu,
+                        };
+                        tx.push_back((req, bus_id)).unwrap();
+                    })
+                });
+            };
 
         let mut report_scan = |scan_addr| {
             display_state.lock(|display_state| {
@@ -637,7 +643,7 @@ mod app {
                 }
             }
 
-            send_data_reqs(*dev);
+            send_data_reqs(*dev, scan_addr);
         } else {
             // Scan for device
             let detected = loop {
@@ -662,17 +668,27 @@ mod app {
 
                                     device.replace(*dev);
                                     *modbus_error_count = 0;
+                                    *detect_retrys = 0;
 
-                                    send_data_reqs(*dev);
+                                    send_data_reqs(*dev, scan_addr);
 
                                     return true;
                                 }
                             }
 
-                            defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr);
+                            *detect_retrys += 1;
+
+                            if *detect_retrys < config::MODBUS_DETECT_RETRYS {
+                                scan_addr -= 1;
+                                defmt::error!("Retry ({}) detecing...", *detect_retrys);
+                            } else {
+                                *detect_retrys = 0;
+                                defmt::error!("Unknown device at 0x{:X}, skip...", scan_addr);
+                            }
 
                             false
                         }) {
+                            *detect_retrys = 0;
                             break true;
                         }
                     }

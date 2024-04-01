@@ -38,6 +38,25 @@ pub enum RequestState<const FREQ_HZ: u32> {
     },
 }
 
+impl<const FREQ_HZ: u32> defmt::Format for RequestState<FREQ_HZ> {
+    fn format(&self, fmt: defmt::Formatter) {
+        match self {
+            RequestState::Stored(s) => {
+                defmt::write!(fmt, "Stored({})", s);
+            }
+            RequestState::Tx(size) => {
+                defmt::write!(fmt, "Tx({})", size);
+            }
+            RequestState::WaitingForResponse => {
+                defmt::write!(fmt, "WaitingForResponse");
+            }
+            RequestState::Success { .. } => {
+                defmt::write!(fmt, "Success(...)");
+            }
+        }
+    }
+}
+
 impl BitOrAssign for Requester {
     fn bitor_assign(&mut self, rhs: Self) {
         *self = match (*self, rhs) {
@@ -248,20 +267,91 @@ impl<const FREQ_HZ: u32, const MAX_SIZE: usize> ModbusDispatcher<FREQ_HZ, MAX_SI
         adu: ResponseAdu<'r>,
         now: TimerInstantU64<FREQ_HZ>,
     ) {
-        if let Some(mut r) = self.pending_requests.find_mut(|r| {
+        use modbus_core::{ExceptionResponse, FnCode, Response};
+
+        let find_data = move |func_code: u8| -> &[u8] {
+            let mut offset = None;
+            let mut start = 0;
+            while start < data.len() {
+                if data[start] == adu.hdr.slave
+                    && ((data[start + 1] == func_code) || (data[start + 1] == (func_code | 0x80)))
+                {
+                    offset.replace(start);
+                    break;
+                }
+                start += 1;
+            }
+
+            let offet = offset.expect("Failed to find offset for response");
+            &data[offet..]
+        };
+
+        let func_code: u8 = match adu.pdu.0 {
+            Ok(Response::ReadInputRegisters(_)) => FnCode::ReadInputRegisters.into(),
+            Ok(Response::ReadHoldingRegisters(_)) => FnCode::ReadHoldingRegisters.into(),
+            Ok(Response::Custom(x, _)) => {
+                let fn_code: u8 = x.into();
+                let data = find_data(fn_code);
+                if let Ok(ex) = ExceptionResponse::try_from(&data[1..]) {
+                    defmt::error!("Exception: {}", defmt::Debug2Format(&ex));
+                    ex.function.into()
+                } else {
+                    defmt::error!("Custom function code: 0x{:X}", fn_code);
+                    return;
+                }
+            }
+            Ok(x) => {
+                defmt::error!(
+                    "Unsupported response function code: {}",
+                    defmt::Debug2Format(&x)
+                );
+                return;
+            }
+            Err(e) => {
+                defmt::error!(
+                    "Response error: {}, code: {}",
+                    defmt::Debug2Format(&e.function),
+                    defmt::Debug2Format(&e.exception)
+                );
+                return;
+            }
+        };
+
+        let ok = if let Some(mut r) = self.pending_requests.find_mut(|r| {
             matches!(r.state, RequestState::WaitingForResponse)
                 && (r.req_data[0] == adu.hdr.slave)
-                && (r.req_data[1] == data[1] & 0x7F)
+                && (r.req_data[1] == func_code)
         }) {
             if r.start + self.timeout > now {
                 r.state = RequestState::Success {
-                    data: data.to_vec(),
+                    data: find_data(func_code).to_vec(),
                     ts: now,
                 };
             } else {
                 defmt::error!("Request {} timeouted", r.start.ticks());
             }
             r.finish();
+            true
+        } else {
+            false
+        };
+
+        if !ok {
+            defmt::error!(
+                "Response for unknown request, slave: 0x{:X}, function: 0x{:X}",
+                adu.hdr.slave,
+                data[1] & 0x7F
+            );
+            self.pending_requests.iter().for_each(|r| {
+                defmt::debug!(
+                    "Requester={} State={}, Start={}, Dest={:02X}, F={:02X}",
+                    r.requester,
+                    r.state,
+                    r.start.ticks(),
+                    r.req_data[0],
+                    r.req_data[1]
+                );
+            });
         }
     }
 

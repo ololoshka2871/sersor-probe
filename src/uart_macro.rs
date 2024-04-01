@@ -158,6 +158,7 @@ macro_rules! uart_interrupt {
             if let Some(rx) = uart.rx_irq() {
                 if let Ok(byte) = rx.read() {
                     uart.reset_tx_delay(now);
+                    defmt::trace!("{}: Rx byte: 0x{:02X}", $name, byte);
                     if $modbus_assembly_buffer.feed_byte(byte) {
                         if let Some(adu) = $modbus_assembly_buffer.try_decode_response() {
                             defmt::trace!("{}: Valid response!", $name);
@@ -183,9 +184,11 @@ macro_rules! uart_interrupt {
                         }
                         Err(Some(ts)) => {
                             uart.switch_rx(now);
+                            $modbus_assembly_buffer.reset();
                             defmt::trace!("{} Tx complete (T{})", $name, ts.ticks());
                         }
                         Err(None) => {
+                            $modbus_assembly_buffer.reset();
                             uart.switch_rx(now);
                         }
                     }

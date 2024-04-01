@@ -3,7 +3,7 @@ use core::{
     ops::{Add, Index},
 };
 
-use alloc::{boxed::Box, format, string::String};
+use alloc::{borrow::ToOwned, boxed::Box, format, string::String};
 use embedded_graphics::{
     geometry::{Dimensions, Point, Size},
     mono_font::{self, MonoTextStyle, MonoTextStyleBuilder},
@@ -38,6 +38,10 @@ impl CurrentValues {
 
     const fn len(&self) -> usize {
         3
+    }
+
+    pub fn iter(&self) -> core::array::IntoIter<f32, 3> {
+        IntoIterator::into_iter([self.uart, self.rs485, self.i2c])
     }
 }
 
@@ -295,7 +299,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                 let mut arr = [
                     (ScanState::UART(0), current_values[0]),
                     (ScanState::RS485(0), current_values[1]),
-                    (ScanState::I2C(0), current_values[2])
+                    (ScanState::I2C(0), current_values[2]),
                 ];
                 arr.sort_by(|(_, ia), (_, ib)| {
                     ib.partial_cmp(ia).unwrap_or(core::cmp::Ordering::Equal)
@@ -502,7 +506,12 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             (d.0 as i32, d.1 as i32)
         };
 
-        if time > start + crate::config::SCREENSAVER_TIMEOUT_MS.millis() {
+        let is_current_active = self
+            .current_values
+            .iter()
+            .any(|v| v > crate::config::CURRENT_THRESHOLD_MA);
+
+        if time > start + crate::config::SCREENSAVER_TIMEOUT_MS.millis() && !is_current_active {
             let add = Size::new(
                 (display_w as u32 / 2) + (star_base_pos.x % star_base_pos.y) as u32,
                 (display_h as u32 / 2) + (star_base_pos.y % star_base_pos.x) as u32,
@@ -608,7 +617,11 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             let string = format!(
                 "{:>4}: {:>4}",
                 ScanState::bus_name_from_usize(c),
-                format_float_simple(self.current_values[c], 1)
+                if self.current_values[c] < crate::config::CURRENT_THRESHOLD_MA {
+                    "---".to_owned()
+                } else {
+                    format_float_simple(self.current_values[c], 1)
+                }
             );
             let text = Text::with_text_style(
                 string.as_str(),

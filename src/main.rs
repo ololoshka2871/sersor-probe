@@ -522,7 +522,7 @@ mod app {
             }
         } else {
             scan_addr += 1;
-            if scan_addr > config::I2C_ADDR_MIN_MAX {
+            if scan_addr > config::MAX_ADDR_TO_SCAN {
                 scan_addr = config::I2C_ADDR_MIN;
             }
 
@@ -683,7 +683,7 @@ mod app {
 
             if !detected {
                 scan_addr += 1;
-                if scan_addr > bridge::MODBUS_ADDR_MAX {
+                if scan_addr > config::MAX_ADDR_TO_SCAN {
                     scan_addr = 0;
                 }
 
@@ -753,15 +753,26 @@ mod app {
 
         let need_bus_process = display_state.lock(move |ds| ds.update_current(current_values));
 
+        let start_delay = config::START_DURATION_MS.millis();
         match need_bus_process {
             Some(display_state::ScanState::UART(a)) => {
-                modbus_inquary_process::spawn(UART1_BUS_BIND, a).ok();
+                modbus_inquary_process::spawn_after(
+                    if a == 0 { start_delay } else { 0.millis() },
+                    UART1_BUS_BIND,
+                    a,
+                )
+                .ok();
             }
             Some(display_state::ScanState::RS485(a)) => {
-                modbus_inquary_process::spawn(UART2_BUS_BIND, a).ok();
+                modbus_inquary_process::spawn_after(
+                    if a == 0 { start_delay } else { 0.millis() },
+                    UART2_BUS_BIND,
+                    a,
+                )
+                .ok();
             }
             Some(display_state::ScanState::I2C(a)) => {
-                i2c_process::spawn(a).ok();
+                i2c_process::spawn_after(if a == 0 { start_delay } else { 0.millis() }, a).ok();
             }
             _ => {}
         }

@@ -83,7 +83,7 @@ impl ModbusDevice for DeviceDba0 {
             [
                 modbus_core::RequestPdu(modbus_core::Request::ReadInputRegisters(0x00, 8)), // P + T + Fp + Ft
             ]
-            .into_iter(),
+            .into_iter().rev(),
         )
     }
 
@@ -93,6 +93,6 @@ impl ModbusDevice for DeviceDba0 {
         resps: &mut dyn Iterator<Item = &(alloc::vec::Vec<u8>, &str)>,
         bus_id: &'static str,
     ) -> Result<(), DecodeError> {
-        super::read_comon::modbus_resp_to_storage_linear::<byteorder::BigEndian>(bus_id, dest, resps)
+        super::read_comon::modbus_resp_to_storage_linear::<byteorder::LittleEndian>(bus_id, dest, resps)
     }
 }

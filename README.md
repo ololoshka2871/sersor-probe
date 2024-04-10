@@ -8,6 +8,7 @@
 2. rrb - build release and flash
 
 # Connections
+![sch](./SensorProbe.pdf)
 
 ## 485-UART (UART2)
 | Pin | Usage |

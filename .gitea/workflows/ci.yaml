@@ -13,6 +13,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install flip-link
+        run: |
+          cargo install flip-link
+          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+
       - name: Build
         run: cargo build --release
 

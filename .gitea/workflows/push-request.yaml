@@ -1,8 +1,10 @@
 name: Pull Request Workflow
-on: 
-  push:
-    tags:
-      - v*
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - master
+      - "*/*"
 
 env:
   NODE_TLS_REJECT_UNAUTHORIZED: 0
@@ -30,16 +32,4 @@ jobs:
       
       - name: Build
         run: |
-          cargo build --release   
-
-      - name: Create binary dist for AutoPll+Display+NoEpot
-        run: arm-none-eabi-objcopy -O binary target/thumbv7m-none-eabi/release/sersor-probe sersor-probe.bin
-   
-      - name: Create release
-        uses: akkuman/gitea-release-action@v1
-        with:
-          body: |
-            ## Версия ${{ github.ref }}
-          files: |
-            target/thumbv7m-none-eabi/release/sersor-probe
-            sersor-probe.bin
+          cargo build --release

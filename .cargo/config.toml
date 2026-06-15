@@ -33,7 +33,7 @@ rustflags = [
   "-C", "link-arg=-Tdefmt.x",
 
   # flip-link
-  "-C", "linker=flip-link",
+  #"-C", "linker=flip-link",
 ]
 
 [build]
@@ -57,3 +57,6 @@ rrb = "run --release --bin sersor-probe"
 # https://github.com/dtolnay/cargo-expand
 [expand]
 color = "always"
+
+[env]
+DEFMT_LOG = "debug"

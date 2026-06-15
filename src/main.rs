@@ -1,6 +1,5 @@
 #![no_main]
 #![no_std]
-#![feature(macro_metavar_expr)]
 
 pub mod bridge;
 mod config;

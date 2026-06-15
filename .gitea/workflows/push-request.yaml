@@ -33,3 +33,11 @@ jobs:
       - name: Build
         run: |
           cargo build --release
+
+      - name: Upload build artifacts (agent)
+        uses: https://gitea.sctbelpa/Public/upload-artifact@v3
+        with:
+          name: firmware
+          path: target/thumbv7m-none-eabi/release/sersor-probe
+          retention-days: 7
+          if-no-files-found: error

@@ -20,8 +20,6 @@ use systick_monotonic::{fugit::TimerInstantU64, ExtU64};
 
 use crate::{devices::ValuesStorage, support::RectangleExt};
 
-use crate::support::format_float_simple;
-
 #[derive(Clone, Copy, Default)]
 pub struct CurrentValues {
     pub uart: f32,
@@ -620,7 +618,7 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
                 if self.current_values[c] < crate::config::CURRENT_THRESHOLD_MA {
                     "---".to_owned()
                 } else {
-                    format_float_simple(self.current_values[c], 1)
+                    format!("{:.1}", self.current_values[c])
                 }
             );
             let text = Text::with_text_style(
@@ -728,8 +726,8 @@ impl<const FREQ_HZ: u32> DisplayState<FREQ_HZ> {
             // Ток потребления
             {
                 let txt = format!(
-                    "I={:>w$}mA",
-                    format_float_simple(self.current_values[ss.bus_name()], 1),
+                    "I={:>w$.1}mA",
+                    self.current_values[ss.bus_name()],
                     w = field_width as usize - 2
                 );
                 let text = Text::with_text_style(

@@ -3,8 +3,6 @@ use alloc::{format, string::String};
 
 use crate::devices::ValuesStorage;
 
-use crate::support::format_float_simple as f;
-
 #[derive(defmt_macros::Format, Copy, Clone)]
 pub struct PTFpFtTCpuVInStorage {
     pub sender: &'static str,
@@ -42,13 +40,8 @@ impl ValuesStorage for PTFpFtTCpuVInStorage {
         write!(s, "{{ ").ok();
         write!(
             s,
-            "P={}, T={}, Fp={}, Ft={}, Tcpu={}, Vin={}",
-            f(self.data[0], 2),
-            f(self.data[1], 2),
-            f(self.data[2], 2),
-            f(self.data[3], 2),
-            f(self.data[4], 2),
-            f(self.data[5], 2)
+            "P={:.2}, T={:.2}, Fp={:.2}, Ft={:.2}, Tcpu={:.2}, Vin={:.2}",
+            self.data[0], self.data[1], self.data[2], self.data[3], self.data[4], self.data[5]
         )
         .ok();
         write!(s, " }}").ok();
@@ -57,37 +50,18 @@ impl ValuesStorage for PTFpFtTCpuVInStorage {
 
     fn render(&self, field_width: u32) -> Vec<String> {
         alloc::vec![
-            format!("P={:>w$}", f(self.data[0], 2), w = field_width as usize - 2),
-            format!("T={:>w$}", f(self.data[1], 2), w = field_width as usize - 2),
-            format!(
-                "Fp={:>w$}",
-                f(self.data[2], 1),
-                w = field_width as usize - 3
-            ),
-            format!(
-                "Ft={:>w$}",
-                f(self.data[3], 1),
-                w = field_width as usize - 3
-            ),
-            format!(
-                "Tcpu={:>w$}",
-                f(self.data[4], 1),
-                w = field_width as usize - 5
-            ),
-            format!(
-                "Vin={:>w$}",
-                f(self.data[5], 1),
-                w = field_width as usize - 4
-            ),
+            format!("P={:>w$.2}", self.data[0], w = field_width as usize - 2),
+            format!("T={:>w$.2}", self.data[1], w = field_width as usize - 2),
+            format!("Fp={:>w$.1}", self.data[2], w = field_width as usize - 3),
+            format!("Ft={:>w$.1}", self.data[3], w = field_width as usize - 3),
+            format!("Tcpu={:>w$.1}", self.data[4], w = field_width as usize - 5),
+            format!("Vin={:>w$.1}", self.data[5], w = field_width as usize - 4),
         ]
     }
 
     fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe {
-            core::slice::from_raw_parts_mut(
-                &mut self.data as *mut f32 as *mut u8,
-                self.size(),
-            )
+            core::slice::from_raw_parts_mut(&mut self.data as *mut f32 as *mut u8, self.size())
         }
     }
 

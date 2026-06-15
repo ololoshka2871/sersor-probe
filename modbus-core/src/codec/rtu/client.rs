@@ -2,7 +2,7 @@
 use super::*;
 
 /// Decode an RTU response.
-pub fn decode_response(buf: &[u8]) -> Result<Option<ResponseAdu>> {
+pub fn decode_response(buf: &[u8]) -> Result<Option<ResponseAdu<'_>>> {
     decode(DecoderType::Response, buf)
         .and_then(|frame| {
             if let Some((DecodedFrame { slave, pdu }, _frame_pos)) = frame {

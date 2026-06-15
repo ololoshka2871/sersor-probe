@@ -2,8 +2,8 @@
 
 use super::*;
 
-pub mod server;
 pub mod client;
+pub mod server;
 pub use crate::frame::rtu::*;
 
 // [MODBUS over Serial Line Specification and Implementation Guide V1.02](http://modbus.org/docs/Modbus_over_serial_line_V1_02.pdf), page 13
@@ -30,7 +30,7 @@ pub struct FrameLocation {
 pub fn decode(
     decoder_type: DecoderType,
     buf: &[u8],
-) -> Result<Option<(DecodedFrame, FrameLocation)>> {
+) -> Result<Option<(DecodedFrame<'_>, FrameLocation)>> {
     use DecoderType::*;
     let mut drop_cnt = 0;
 
@@ -89,7 +89,7 @@ pub fn decode(
 }
 
 /// Extract a PDU frame out of a buffer.
-pub fn extract_frame(buf: &[u8], pdu_len: usize) -> Result<Option<DecodedFrame>> {
+pub fn extract_frame(buf: &[u8], pdu_len: usize) -> Result<Option<DecodedFrame<'_>>> {
     let adu_len = 1 + pdu_len;
     if buf.len() >= adu_len + 2 {
         let (adu_buf, buf) = buf.split_at(adu_len);

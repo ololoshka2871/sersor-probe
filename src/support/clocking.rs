@@ -73,7 +73,7 @@ impl MyConfig {
 
         // the USB clock is only valid if an external crystal is used, the PLL is enabled, and the
         // PLL output frequency is a supported one.
-        #[cfg(any(feature = "stm32f103", feature = "connectivity"))]
+        #[cfg(feature = "stm32f103")]
         let usbclk_valid = matches!(
             (self.hse, self.pllmul, sysclk),
             (Some(_), Some(_), 72_000_000) | (Some(_), Some(_), 48_000_000)

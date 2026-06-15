@@ -8,7 +8,7 @@
 # runner = "arm-none-eabi-gdb -q -x openocd.gdb"
 # runner = "gdb-multiarch -q -x openocd.gdb"
 # runner = "gdb -q -x openocd.gdb"
-runner = "probe-run --chip STM32F103CBx"
+runner = ["probe-rs", "run", "--preverify", "--chip", "STM32F103CB", "--log-format=oneline"]
 
 rustflags = [
   # This is needed if your flash or ram addresses are not aligned to 0x10000 in memory.x
@@ -33,7 +33,7 @@ rustflags = [
   "-C", "link-arg=-Tdefmt.x",
 
   # flip-link
-  "-C", "linker=flip-link",
+  #"-C", "linker=flip-link",
 ]
 
 [build]
@@ -57,3 +57,6 @@ rrb = "run --release --bin sersor-probe"
 # https://github.com/dtolnay/cargo-expand
 [expand]
 color = "always"
+
+[env]
+DEFMT_LOG = "debug"

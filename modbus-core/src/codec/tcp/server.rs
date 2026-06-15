@@ -2,7 +2,7 @@
 use super::*;
 
 /// Decode an TCP request.
-pub fn decode_request(buf: &[u8]) -> Result<Option<RequestAdu>> {
+pub fn decode_request(buf: &[u8]) -> Result<Option<RequestAdu<'_>>> {
     decode(DecoderType::Request, buf).and_then(|frame| {
         if let Some((
             DecodedFrame {
@@ -35,7 +35,7 @@ pub fn decode_request(buf: &[u8]) -> Result<Option<RequestAdu>> {
 }
 
 // Decode a TCP response
-pub fn decode_response(buf: &[u8]) -> Result<Option<ResponseAdu>> {
+pub fn decode_response(buf: &[u8]) -> Result<Option<ResponseAdu<'_>>> {
     decode(DecoderType::Response, buf)
         .and_then(|frame| {
             if let Some((

@@ -1,8 +1,5 @@
 pub mod clocking;
 
-mod format_float_simple;
-pub use format_float_simple::format_float_simple;
-
 mod hid_descriptor;
 pub use hid_descriptor::{HidDescriptor, HID_REPORT_SIZE};
 

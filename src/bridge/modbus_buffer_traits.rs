@@ -1,8 +1,8 @@
 use modbus_core::rtu::{RequestAdu, ResponseAdu};
 
 pub trait RxBuffer {
-    fn try_decode_request(&self) -> Option<RequestAdu>;
-    fn try_decode_response(&self) -> Option<ResponseAdu>;
+    fn try_decode_request(&self) -> Option<RequestAdu<'_>>;
+    fn try_decode_response(&self) -> Option<ResponseAdu<'_>>;
 }
 
 pub trait BufferTrait {

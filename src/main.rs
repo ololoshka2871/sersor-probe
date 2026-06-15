@@ -1,6 +1,5 @@
 #![no_main]
 #![no_std]
-#![feature(macro_metavar_expr)]
 
 pub mod bridge;
 mod config;
@@ -161,13 +160,12 @@ mod app {
     #[monotonic(binds = SysTick, default = true)]
     type MonoTimer = Systick<{ config::SYSTICK_RATE_HZ }>;
 
-    #[init]
+    #[init(local = [
+        usb_allocator: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None,
+        heap_mem: [core::mem::MaybeUninit<u8>; config::HEAP_SIZE] = [core::mem::MaybeUninit::uninit(); config::HEAP_SIZE]]
+    )]
     fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
         use usbd_hid::descriptor::SerializedDescriptor;
-
-        static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
-        static mut HEAP_MEM: [core::mem::MaybeUninit<u8>; config::HEAP_SIZE] =
-            [core::mem::MaybeUninit::uninit(); config::HEAP_SIZE];
 
         defmt::info!("Init...");
 
@@ -175,7 +173,7 @@ mod app {
         ctx.core.DWT.enable_cycle_counter();
         defmt::info!("DWT...");
 
-        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, config::HEAP_SIZE) }
+        unsafe { HEAP.init(ctx.local.heap_mem.as_ptr() as usize, config::HEAP_SIZE) }
         defmt::info!("Heap {} bytes...", config::HEAP_SIZE);
 
         let mut flash = ctx.device.FLASH.constrain();
@@ -212,33 +210,25 @@ mod app {
             pin_dp: gpioa.pa12,
         };
 
-        unsafe {
-            USB_BUS.replace(UsbBus::new(usb));
-        }
+        let bus = ctx
+            .local
+            .usb_allocator
+            .get_or_insert(stm32f1xx_hal::usb::UsbBus::new(usb));
 
-        let serial1 = CdcAcmClass::new(
-            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            config::CDC_ACM_MAX_PACKET_SIZE,
-        );
-        let serial2 = CdcAcmClass::new(
-            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            config::CDC_ACM_MAX_PACKET_SIZE,
-        );
+        let serial1 = CdcAcmClass::new(bus, config::CDC_ACM_MAX_PACKET_SIZE);
+        let serial2 = CdcAcmClass::new(bus, config::CDC_ACM_MAX_PACKET_SIZE);
         let hid_i2c = usbd_hid::hid_class::HIDClass::new(
-            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
+            bus,
             support::HidDescriptor::desc(),
             config::HID_I2C_POLL_INTERVAL_MS,
         );
 
-        let usb_dev = UsbDeviceBuilder::new(
-            unsafe { USB_BUS.as_ref().unwrap_unchecked() },
-            usb_device::prelude::UsbVidPid(0x16c0, 0x394f),
-        )
-        .manufacturer("SCTBElpa")
-        .product("SensorProbe")
-        .serial_number(stm32_device_signature::device_id_hex())
-        .composite_with_iads()
-        .build();
+        let usb_dev = UsbDeviceBuilder::new(bus, usb_device::prelude::UsbVidPid(0x16c0, 0x394f))
+            .manufacturer("SCTBElpa")
+            .product("SensorProbe")
+            .serial_number(stm32_device_signature::device_id_hex())
+            .composite_with_iads()
+            .build();
 
         defmt::info!("USB composite device");
 

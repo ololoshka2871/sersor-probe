@@ -30,7 +30,7 @@ pub struct FrameLocation {
 pub fn decode(
     decoder_type: DecoderType,
     buf: &[u8],
-) -> Result<Option<(DecodedFrame, FrameLocation)>> {
+) -> Result<Option<(DecodedFrame<'_>, FrameLocation)>> {
     use DecoderType::*;
     let mut drop_cnt = 0;
 
@@ -89,7 +89,7 @@ pub fn decode(
 }
 
 /// Extract a PDU frame out of a buffer.
-pub fn extract_frame(buf: &[u8], pdu_len: usize) -> Result<Option<DecodedFrame>> {
+pub fn extract_frame(buf: &[u8], pdu_len: usize) -> Result<Option<DecodedFrame<'_>>> {
     let adu_len = 7 + pdu_len;
     if buf.len() >= adu_len {
         let (adu_buf, _next_frame) = buf.split_at(adu_len);
